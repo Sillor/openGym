@@ -295,6 +295,45 @@ export function dayTotals(log, day) {
   }
 }
 
+const MEAL_SOURCES = ['photo', 'text', 'barcode', 'manual']
+
+function mealNum(v, max, dec) {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return dec ? 0 : 0
+  const c = Math.min(n, max)
+  return dec ? Math.round(c * 10) / 10 : Math.round(c)
+}
+
+/**
+ * A food-log entry ready to store. Null when the name or the day is missing.
+ * `edited` stays set once the person changes a number the model suggested.
+ */
+export function cleanMeal(raw, { day, id, source } = {}) {
+  const name = String(raw?.name ?? '').trim().slice(0, 120)
+  const d = typeof (raw?.d || day) === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw?.d || day) ? (raw?.d || day) : null
+  if (!name || !d) return null
+  const meal = MEALS.includes(raw?.meal) ? raw.meal : 'snack'
+  const src = MEAL_SOURCES.includes(raw?.source) ? raw.source : (MEAL_SOURCES.includes(source) ? source : 'manual')
+  const grams = raw?.grams == null || raw?.grams === '' ? null : mealNum(raw.grams, 10000, true)
+  const media = Array.isArray(raw?.media) ? raw.media.filter(m => m && typeof m === 'object').slice(0, 3) : []
+  return {
+    id: raw?.id || id,
+    d,
+    t: Number(raw?.t) || Date.now(),
+    name,
+    kcal: mealNum(raw?.kcal, 20000, false),
+    protein: mealNum(raw?.protein, 2000, true),
+    carbs: mealNum(raw?.carbs, 2000, true),
+    fat: mealNum(raw?.fat, 2000, true),
+    grams,
+    meal,
+    source: src,
+    note: String(raw?.note ?? '').trim().slice(0, 280),
+    media,
+    edited: !!raw?.edited,
+  }
+}
+
 /**
  * Scale kcal and macros from the entry's gram basis to `grams`. Unchanged when the entry has
  * no positive gram basis — there is nothing honest to scale from.

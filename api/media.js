@@ -279,7 +279,8 @@ export function mp4Info(fd, size) {
 
 /**
  * Every blob a state refers to: customEx[].media.hash and .poster.hash, and the same two of every
- * entry of workouts[].media (the photos and videos of a logged workout). Deliberately loose —
+ * entry of workouts[].media (the photos and videos of a logged workout), and the same two of
+ * every entry of foodLog[].media (a meal photo). Deliberately loose —
  * each field counts on its own as long as it is a well-formed hash, even when the rest of the ref
  * would not pass the client's normalizeMediaRef, and a workout's list counts past the client's
  * cap of six. This set decides what is KEPT, so erring towards more is the safe direction.
@@ -299,6 +300,10 @@ export function referencedHashes(state) {
   for (const w of Array.isArray(state.workouts) ? state.workouts : []) {
     if (!isObj(w) || !Array.isArray(w.media)) continue;
     for (const m of w.media) if (isObj(m)) ref(m);
+  }
+  for (const e of Array.isArray(state.foodLog) ? state.foodLog : []) {
+    if (!isObj(e) || !Array.isArray(e.media)) continue;
+    for (const m of e.media) if (isObj(m)) ref(m);
   }
   return out;
 }

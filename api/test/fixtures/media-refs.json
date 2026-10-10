@@ -869,6 +869,29 @@
         "workouts": []
       },
       "expect": []
+    },
+    {
+      "name": "a meal photo on the food log",
+      "state": {
+        "foodLog": [
+          {
+            "id": "m1",
+            "d": "2026-10-10",
+            "media": [
+              {
+                "kind": "image",
+                "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "mime": "image/jpeg",
+                "size": 1000
+              },
+              { "hash": "not-a-hash" }
+            ]
+          }
+        ]
+      },
+      "expect": [
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
     }
   ]
 }

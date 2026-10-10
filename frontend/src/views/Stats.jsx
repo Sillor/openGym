@@ -4,6 +4,7 @@ import { useStore } from '../store/useStore.js'
 import { EXIDX, matchExercise, betterWeight, isAssisted } from '../lib/exercises.js'
 import { lastBW, streakWeeks, setLabel, modeOf, effortOf, entriesForExercise, metricEntriesForExercise, metricModeForEntry, bestWeightForEntry, completedRepsOf, workoutDay, workoutAt } from '../lib/history.js'
 import { fmtNum, fmtDate, fmtVol, todayISO, isoOf, weekKey, weekStartOf, exerciseNameText } from '../lib/format.js'
+import { dayTotals, profileTargets } from '../lib/nutrition.js'
 import { speedUnitOf, speedLabel, toSpeed } from '../lib/speed.js'
 import { t, exerciseNameFor, exerciseNameClass, getLang } from '../lib/i18n.js'
 import { bwSheet, goalSheet, calendarSheet, dayOverrideSheet, workoutDetailSheet, exerciseHistorySheet, WorkoutRow, bwDeltaColor, weighInsSheet } from '../sheets.jsx'
@@ -397,6 +398,14 @@ export function WeeklyPlanVolume({ S }) {
   </div>
 }
 
+function nutritionStatLine(S) {
+  const food = dayTotals(S.foodLog, todayISO())
+  const target = profileTargets(S).targets
+  if (!food.meals) return t('Meals, calories and macros for the day.')
+  if (target) return t('{0} of {1} kcal today', fmtNum(food.kcal), fmtNum(target.kcal))
+  return t('{0} kcal today', fmtNum(food.kcal))
+}
+
 export default function Stats() {
   const nav = useNavigate()
   const S = useStore(s => s.S)
@@ -644,6 +653,11 @@ export default function Stats() {
         <div className="muted small" style={{ marginTop: 4 }}>{t('Every photo you kept with a workout, lined up by date. Plus a before/after slider.')}</div></div>
       <Button size="sm" variant="tinted" trailingIcon="chevronRight" style={{ flexShrink: 0 }} onClick={() => nav('/progress-photos')}>{t('Open')}</Button>
     </div>}
+    <div className="card row between" style={{ alignItems: 'center', gap: 12 }}>
+      <div style={{ minWidth: 0 }}><h2 style={{ margin: 0 }}>{t('Nutrition')}</h2>
+        <div className="muted small" style={{ marginTop: 4 }}>{nutritionStatLine(S)}</div></div>
+      <Button size="sm" variant="tinted" trailingIcon="chevronRight" style={{ flexShrink: 0 }} onClick={() => nav('/nutrition')}>{t('Open')}</Button>
+    </div>
     <div className="card row between" style={{ alignItems: 'center', gap: 12 }}>
       <div style={{ minWidth: 0 }}><h2 style={{ margin: 0 }}>{t('Body measurements')}</h2>
         <div className="muted small" style={{ marginTop: 4 }}>{(S.measurements || []).length

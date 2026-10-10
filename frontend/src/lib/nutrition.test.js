@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ageYears, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, scaleToGrams, targetExplain, weeklyFromUnit, weeklyInUnit,
+  ageYears, cleanMeal, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, scaleToGrams, targetExplain, weeklyFromUnit, weeklyInUnit,
 } from './nutrition.js'
 
 // Male, 30, 180 cm, 80 kg, moderate, maintain. Mifflin then the moderate multiplier.
@@ -207,5 +207,18 @@ describe('day totals, meals, and serving scale', () => {
     })
     const bare = { kcal: 200, name: 'rice' }
     expect(scaleToGrams(bare, 150)).toBe(bare)
+  })
+})
+
+describe('cleanMeal', () => {
+  it('keeps a typed meal and drops a blank name', () => {
+    const meal = cleanMeal({ name: '  Oats ', kcal: 300, protein: 12.26, meal: 'breakfast', note: ' honey ' }, { day: '2026-10-10', id: 'm1' })
+    expect(meal).toMatchObject({ id: 'm1', d: '2026-10-10', name: 'Oats', kcal: 300, protein: 12.3, meal: 'breakfast', source: 'manual', note: 'honey', grams: null, edited: false })
+    expect(cleanMeal({ name: '  ', kcal: 10 }, { day: '2026-10-10' })).toBeNull()
+    expect(cleanMeal({ name: 'Oats' }, {})).toBeNull()
+  })
+  it('keeps at most three photos', () => {
+    const media = [{ hash: 'a' }, { hash: 'b' }, { hash: 'c' }, { hash: 'd' }]
+    expect(cleanMeal({ name: 'Plate', media, source: 'photo' }, { day: '2026-10-10' }).media).toHaveLength(3)
   })
 })
