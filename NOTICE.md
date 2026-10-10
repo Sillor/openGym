@@ -143,6 +143,38 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### Calorie targets — Fud AI
+
+The daily calorie and macro formulas in `frontend/src/lib/nutrition.js` follow
+[**Fud AI**](https://github.com/apoorvdarshan/fud-ai) by Apoorv Darshan (`UserProfile.kt`,
+`ActivityLevel.kt`), used under the **MIT License**. The food-analysis prompts, when added, come
+from the same project's `FoodAnalysisService.kt` and `FoodAnalysis.kt`. The math was rewritten in
+JavaScript; the Android and iOS apps are not part of the openGym build.
+
+```
+MIT License
+
+Copyright (c) 2026 Apoorv Darshan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### Camera scan & photo decode in the browser — `jsQR`
 
 In a browser (including the installed PWA), reading a code from the camera or from an imported

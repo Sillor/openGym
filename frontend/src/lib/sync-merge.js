@@ -29,6 +29,8 @@
  *     its neighbour there (unionByNeighbours); of an id that both have, the version
  *     edited last by its own `_ts` (stampRoutines), the newer copy's on a tie
  *   - bodyweight, measurements: union by day, the later-edited (`t`) entry of a day that both have
+ *   - foodLog: union by id; of an id that both have, the entry edited last by its own `t`
+ *     (stampChange), the newer copy's on a tie. Many meals a day, so not one-per-day like a weigh-in
  *   - favEx: ordered set union, the newer copy first
  *   - exWeights: union by exercise, the better `w` for that exercise — larger for an ordinary
  *     lift, smaller on an assistance machine (a PR logged on the other device must not be
@@ -171,6 +173,17 @@ export function mergeBodyweight(a = [], b = []) {
     if (!cur || (e.t || 0) > (cur.t || 0)) byDay.set(e.d, e)
   }
   return [...byDay.values()].sort((x, y) => (x.d < y.d ? -1 : 1))
+}
+
+/** Every meal both copies logged. Same id: the later `t`, and `newer` when the times match. */
+function mergeFoodLog(newer = [], older = []) {
+  const byId = new Map()
+  for (const e of [...list(older), ...list(newer)]) {
+    if (!e || e.id == null) continue
+    const cur = byId.get(e.id)
+    if (!cur || (Number(e.t) || 0) >= (Number(cur.t) || 0)) byId.set(e.id, e)
+  }
+  return [...byId.values()].sort((a, b) => String(a.d).localeCompare(String(b.d)) || (Number(a.t) || 0) - (Number(b.t) || 0))
 }
 
 // The kept load per exercise. "The larger one wins" held while the app only ever raised it —
@@ -400,7 +413,7 @@ const workoutTime = w => Number(w?._ts) || Number(w?.end) || Number(w?.start) ||
 const bodyweightKey = e => `${e?.d}|${e?.t ?? ''}`
 const RESET_LISTS = {
   workouts: workoutKey, routines: x => x?.id, customEx: x => x?.id, bodyweight: bodyweightKey,
-  measurements: bodyweightKey, gymCards: x => x?.id, equipProfiles: x => x?.id, favEx: x => x,
+  measurements: bodyweightKey, foodLog: x => x?.id, gymCards: x => x?.id, equipProfiles: x => x?.id, favEx: x => x,
 }
 const RESET_MAPS = ['exNotes', 'barWeights', ...STAMPED_MAPS]
 /** An entry's name in resetIds: a workout's id (or day and start), a weigh-in's day and time, … */
@@ -456,6 +469,7 @@ export function sinceReset(S, at, ids) {
     out.customEx = list(S.customEx).filter(c => c && after(c._ts))
     out.bodyweight = list(S.bodyweight).filter(e => e && after(e.t))
     out.measurements = list(S.measurements).filter(e => e && after(e.t))
+    out.foodLog = list(S.foodLog).filter(e => e && after(e.t))
     // No time of their own: taken for what they were before the reset, which cleared them.
     out.equipProfiles = []
     out.gymCards = []
@@ -486,7 +500,7 @@ export function sinceReset(S, at, ids) {
 
 // ---- Deletions (`deleted`) ------------------------------------------------------------------
 //
-//   S.deleted = { workouts: { <key>: at }, routines: {…}, customEx, bodyweight, gymCards,
+//   S.deleted = { workouts: { <key>: at }, routines: {…}, customEx, bodyweight, foodLog, gymCards,
 //                 equipProfiles, favEx }
 //
 // A positive `at` is when the entry was removed on some device; a negative one (-at) is when it
@@ -497,14 +511,14 @@ export function sinceReset(S, at, ids) {
 // removal (the entry's own `_ts`, a weigh-in's `t`) keeps it, as does an add-back stamped later.
 const DEL_LISTS = {
   workouts: workoutKey, routines: x => x?.id, customEx: x => x?.id, bodyweight: e => e?.d,
-  measurements: e => e?.d, gymCards: x => x?.id, equipProfiles: x => x?.id, favEx: x => x,
+  measurements: e => e?.d, foodLog: e => e?.id, gymCards: x => x?.id, equipProfiles: x => x?.id, favEx: x => x,
 }
 // When an entry was last edited, to hold against a removal. Entries with no time of their own
 // (favourites, and cards and profiles saved before they were stamped) count as older than any
 // removal.
 const DEL_TIME = {
   workouts: workoutTime, routines: x => Number(x?._ts) || 0, customEx: x => Number(x?._ts) || 0,
-  bodyweight: e => Number(e?.t) || 0, measurements: e => Number(e?.t) || 0,
+  bodyweight: e => Number(e?.t) || 0, measurements: e => Number(e?.t) || 0, foodLog: e => Number(e?.t) || 0,
   gymCards: x => Number(x?._ts) || 0, equipProfiles: x => Number(x?._ts) || 0,
 }
 // Per field, the most stamps kept; past it the oldest go first.
@@ -611,7 +625,7 @@ function applyDeletions(S, deleted) {
 // merge of their own are not stamped here; a field nobody stamped follows the newer copy, as before.
 const OWN_MERGE = new Set([
   '_ts', '_rev', '_wid', '_wids', '_unstamped', '_prior', 'active', 'unit', 'unitSet', 'resetAt', 'resetIds', 'deleted', 'edited', 'undone', 'routineOrder',
-  'workouts', 'routines', 'customEx', 'equipProfiles', 'gymCards', 'bodyweight', 'measurements', 'favEx',
+  'workouts', 'routines', 'customEx', 'equipProfiles', 'gymCards', 'bodyweight', 'measurements', 'foodLog', 'favEx',
   'exWeights', 'balanceOverrides', 'loadKind', 'plates', 'dbLoad', 'dumbbells', 'dayNotes',
 ])
 // Stamped per key instead of whole: one day of the plan, one exercise's note or bar.
@@ -820,6 +834,8 @@ export function mergeStates(a0, b0, { prefer } = {}) {
   out.bodyweight = mergeBodyweight(n.bodyweight, o.bodyweight).map(clone)
   // A day's body measurements are one check-in, kept and merged the way a weigh-in is.
   if (list(n.measurements).length || list(o.measurements).length) out.measurements = mergeBodyweight(n.measurements, o.measurements).map(clone)
+  // Meals are many per day. Same id: the later `t`, and the newer copy when those match.
+  if (list(n.foodLog).length || list(o.foodLog).length) out.foodLog = mergeFoodLog(n.foodLog, o.foodLog).map(clone)
   if (list(n.favEx).length || list(o.favEx).length) out.favEx = [...new Set([...list(n.favEx), ...list(o.favEx)])]
   // What either device removed stays removed (the `deleted` section above). A workout taken out
   // this way leaves its exercises' kept loads to be read again, as an edit of it would: from the
@@ -1009,7 +1025,7 @@ export function highestStamp(S) {
     }
   }
   for (const f of STAMPED_MAPS) if (isMap(S[f])) for (const v of Object.values(S[f])) see(stampOf(v))
-  for (const e of [...list(S.bodyweight), ...list(S.measurements)]) if (e && typeof e === 'object') see(e.t)
+  for (const e of [...list(S.bodyweight), ...list(S.measurements), ...list(S.foodLog)]) if (e && typeof e === 'object') see(e.t)
   return m
 }
 
@@ -1044,6 +1060,17 @@ export function stampChange(prev, next, wall = Date.now()) {
       if (!e || typeof e !== 'object' || e.d == null || e.t == null) continue
       const old = before.get(e.d)
       if (!old || old.t !== e.t) e.t = Math.max(Number(e.t) || 0, now)
+    }
+  }
+  // A meal logged or corrected (its contents or its `t` moved) takes the change's time, so the
+  // later edit of that id wins the merge the way a weigh-in does. Keyed by id: a day holds many.
+  {
+    const foodSame = (a, b) => JSON.stringify({ ...a, t: 0 }) === JSON.stringify({ ...b, t: 0 })
+    const before = new Map(list(prev?.foodLog).filter(e => e && e.id != null).map(e => [e.id, e]))
+    for (const e of list(next.foodLog)) {
+      if (!e || typeof e !== 'object' || e.id == null) continue
+      const old = before.get(e.id)
+      if (!old || old.t !== e.t || !foodSame(old, e)) e.t = Math.max(Number(e.t) || 0, now)
     }
   }
   // A routine put back by an Undo keeps the edit time it had: what puts it back is the add-back
@@ -1123,6 +1150,8 @@ export function localExtras(local, server) {
   const routines = list(local?.routines).filter(r => r && r.id != null && !ids('routines').has(r.id)).length
   const keysNew = f => Object.entries(isMap(local?.[f]) ? local[f] : {})
     .filter(([k, v]) => v != null && !(Array.isArray(v) && !v.length) && !(isMap(server?.[f]) && k in server[f])).length
+  const foodHave = new Map(list(server?.foodLog).filter(e => e && e.id != null).map(e => [e.id, e]))
+  const food = list(local?.foodLog).filter(e => e && e.id != null && (!foodHave.has(e.id) || (Number(e.t) || 0) > (Number(foodHave.get(e.id).t) || 0))).length
   const measured = new Set(list(server?.measurements).map(e => e?.d))
   const setup = ['gymCards', 'equipProfiles'].reduce((n, f) => n + list(local?.[f]).filter(x => x && x.id != null && !ids(f).has(x.id)).length, 0) +
     list(local?.measurements).filter(e => e && e.d != null && !measured.has(e.d)).length +
@@ -1134,5 +1163,6 @@ export function localExtras(local, server) {
     customEx: list(local?.customEx).filter(e => e && !ex.has(e.id)).length,
     ...(routines ? { routines } : {}),
     ...(setup ? { setup } : {}),
+    ...(food ? { food } : {}),
   }
 }

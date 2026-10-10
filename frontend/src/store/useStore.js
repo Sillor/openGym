@@ -25,6 +25,7 @@ import { loadCoachDevice, saveCoachDevice, coachDeviceSettings } from '../lib/co
 import { RTL_LANGS } from '../lib/i18n-core.js'
 import { DEFAULT_TEMPLATE_ID } from '../lib/structuralBalanceTemplates.js'
 
+import { emptyNutrition } from '../lib/nutrition.js'
 import { WC_DEFAULT } from '../lib/workout-controls.js'
 import { sanitizeAccent } from '../lib/accent.js'
 
@@ -94,6 +95,13 @@ export const DEF = {
   // Body measurements (#82): one check-in per day, values in cm whatever the weight unit
   // (lib/measurements.js); merged across devices like weigh-ins (lib/sync-merge.js).
   measurements: [], measurementEnabled: null, customMeasurements: [],
+  // Food diary. `nutrition` is the profile the targets are built from (lib/nutrition.js): height,
+  // birthday, sex for the formula, activity, goal, and what they will and won't eat. One stamped
+  // setting, so the device that edited it last keeps the whole object. `foodLog` is many meals a
+  // day, merged by id like a workout (lib/sync-merge.js). Photos, when a meal has them, are media
+  // refs — never the bytes.
+  nutrition: emptyNutrition(),
+  foodLog: [],
   queue: null,   // a planner's floating week (lib/queue.js) — via the API, or by this rotation feature (below)
   // The in-app rotation's reusable definition — { id, sequence, label } (lib/rotation.js). Never
   // a live queue: it only ever feeds `queue`, and `queue.rotationId` says the pass is managed here.
@@ -196,6 +204,9 @@ export const DEF = {
   // entries, Stats, imports and the separate pre-workout weigh-in flow keep working.
   // Defaults on; an older profile without the key reads as on (`!== false`).
   showWeightCard: true,
+  // The Home calorie card. Off only hides the card; the diary and its targets stay. Defaults on;
+  // an older profile without the key reads as on (`!== false`).
+  showNutritionCard: true,
   // Whether Start opens the quick weigh-in first (sheets.jsx startFlow, issue #137). Off starts
   // the session straight away; weight can still be logged from Home/Stats. On here, so an
   // older profile without the key reads as on (`!== false`) and keeps the step it had; a profile
@@ -1141,7 +1152,7 @@ export const useStore = create((set, get) => {
     reached()
     let asked = false
     const askAbout = async extras => {
-      if (!(extras.workouts || extras.bodyweight || extras.customEx || extras.routines || extras.setup) || typeof ask !== 'function') return false
+      if (!(extras.workouts || extras.bodyweight || extras.customEx || extras.routines || extras.setup || extras.food) || typeof ask !== 'function') return false
       asked = true
       return !!(await ask(extras))
     }
@@ -1235,10 +1246,10 @@ export const useStore = create((set, get) => {
     await applyStash()
     return { adopted: true, added: false }
   }
-  // A copy's workouts, weigh-ins and custom exercises split by the names a sign-in recorded when it
-  // began (`pre`, see setUser): `before` holds what was there then, `later` — null when nothing
-  // is — what was logged since, with the custom exercises its workouts use, in this copy's unit.
-  const ADOPT_FIELDS = ['workouts', 'bodyweight', 'customEx']
+  // A copy's workouts, weigh-ins, meals and custom exercises split by the names a sign-in recorded
+  // when it began (`pre`, see setUser): `before` holds what was there then, `later` — null when
+  // nothing is — what was logged since, with the custom exercises its workouts use, in this copy's unit.
+  const ADOPT_FIELDS = ['workouts', 'bodyweight', 'customEx', 'foodLog']
   const splitByPre = (S, pre) => {
     const before = { ...S }
     const later = { _ts: S._ts, unit: S.unit, ...(S.unitSet ? { unitSet: S.unitSet } : {}) }

@@ -984,3 +984,45 @@ describe('body measurements across devices (#82)', () => {
     expect(next.measurements[0].t).toBe(1000)
   })
 })
+
+describe('food log across devices', () => {
+  const meal = (id, t, kcal, d = '2026-10-10') => ({ id, d, t, name: id, kcal, protein: 1, carbs: 1, fat: 1 })
+  it('keeps meals logged on two devices the same day', () => {
+    const phone = base({ _ts: 20, foodLog: [meal('a', 2, 100)] })
+    const desk = base({ _ts: 10, foodLog: [meal('b', 1, 200)] })
+    expect(mergeStates(phone, desk).foodLog.map(e => e.id)).toEqual(['b', 'a'])
+  })
+  it('keeps the later edit of one meal, even when the other copy is newer', () => {
+    const edited = base({ _ts: 50, foodLog: [meal('a', 5, 100)] })
+    const newer = base({ _ts: 80, foodLog: [meal('a', 4, 90)] })
+    expect(mergeStates(edited, newer).foodLog[0].kcal).toBe(100)
+  })
+  it('a deleted meal stays deleted, and an edit after the deletion comes back', () => {
+    const both = base({ _ts: 100, foodLog: [meal('m1', 50, 150)] })
+    const removed = stampDeletions(both, base({ _ts: 100, foodLog: [] }), 1000)
+    expect(mergeStates(removed, base({ ...both, _ts: 2000 })).foodLog).toEqual([])
+    const edited = clone(both)
+    edited.foodLog = [meal('m1', 1500, 180)]
+    stampChange(both, edited, 1500)
+    expect(mergeStates(removed, edited).foodLog[0].kcal).toBe(180)
+  })
+  it('keeps a nutrition edit made on the device that did not log the meal', () => {
+    const start = base({ _ts: 100, nutrition: { heightCm: 180, likes: ['oats'] }, foodLog: [] })
+    const phone = clone(start)
+    phone.nutrition = { ...phone.nutrition, heightCm: 190 }
+    phone._ts = stampChange(start, phone, 1000)
+    const laptop = clone(start)
+    laptop.foodLog = [meal('m1', 1, 200)]
+    laptop._ts = stampChange(start, laptop, 2000)
+    const m = mergeStates(phone, laptop)
+    expect(m.nutrition.heightCm).toBe(190)
+    expect(m.nutrition.likes).toEqual(['oats'])
+    expect(m.foodLog.map(e => e.id)).toEqual(['m1'])
+  })
+  it('counts a meal the server has not seen', () => {
+    const server = base({ foodLog: [meal('a', 1, 100)] })
+    const local = base({ foodLog: [meal('a', 1, 100), meal('b', 2, 50)] })
+    expect(localExtras(local, server).food).toBe(1)
+    expect(localExtras(server, server).food).toBeUndefined()
+  })
+})
