@@ -89,7 +89,7 @@ describe('the root', () => {
     expect(host.querySelector('.sp-acct .lrow-t').textContent).toBe('Guest')
     expect(host.querySelector('.sp-acct .lrow-s').textContent).toBe('Your data lives on this device. Sign in to sync.')
     // a guest in a browser has no reminders (no push server) and no Coach page (the server's Coach)
-    expect(titles()).toEqual(['Guest', 'Workout', 'Timer alerts', 'Plan & schedule', 'Units & language', 'Equipment', 'Look & Home', 'Data & backup', 'About & updates'])
+    expect(titles()).toEqual(['Guest', 'Workout', 'Timer alerts', 'Plan & schedule', 'Units & language', 'Equipment', 'Look & Home', 'Nutrition', 'Data & backup', 'About & updates'])
     expect(rowTitled('Workout').querySelector('.lrow-v').textContent).toBe('1:30 rest · Cards')
     expect(rowTitled('Timer alerts').querySelector('.lrow-v').textContent).toBe('Sound · Vibrate')
     expect(rowTitled('Plan & schedule').querySelector('.lrow-v').textContent).toMatch(/^Fixed Week · Mon/)
@@ -432,6 +432,32 @@ describe('searchSettings', () => {
     } finally { await setLang('en') }
     expect(searchSettings('tone', { ...guestWeb, user: { id: 'u' }, pushOK: true, reminderOn: true, nudge: true }, s => s).map(h => h.title)).toContain('Nudge tone')
     expect(searchSettings('json', guestWeb, s => s).map(h => h.title)).toContain('Export backup (JSON)')
+  })
+})
+
+describe('nutrition settings', () => {
+  it('states a calorie target from the weigh-in, height and goal', () => {
+    mocks.S = {
+      ...mocks.S, unit: 'kg', targetW: 75,
+      bodyweight: [{ d: '2026-10-01', w: 80, t: 1 }],
+      nutrition: { heightCm: 180, birthday: '1996-01-15', sex: 'male', activity: 'moderate', goal: 'lose', weeklyKg: 0.5 },
+    }
+    mount('nutrition')
+    expect(host.textContent).toContain('2,057 kcal')
+    expect(host.textContent).toContain('180 cm')
+    expect(host.textContent).toContain('0.5 kg')
+  })
+
+  it('says what is missing, and stores a height you type', () => {
+    mount('nutrition')
+    expect(host.textContent).toContain('Log a weigh-in on Home')
+    const input = host.querySelector('[aria-label="Height"]')
+    act(() => {
+      const proto = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+      proto.set.call(input, '178')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(mocks.S.nutrition.heightCm).toBe(178)
   })
 })
 

@@ -30,6 +30,8 @@ const NOTE_MAX = 500
 const trunc = n => Math.trunc(n)
 
 function numOrNull(v, { min = -Infinity, max = Infinity, int = false } = {}) {
+  // Number(null) and Number('') are 0. An empty field must stay empty.
+  if (v == null || v === '') return null
   const n = Number(v)
   if (!Number.isFinite(n) || n < min || n > max) return null
   return int ? trunc(n) : n
@@ -140,8 +142,10 @@ export function latestBodyFatFraction(S) {
  */
 export function inferGoal({ goal, weight, targetW, coachGoal } = {}) {
   if (goal === 'lose' || goal === 'maintain' || goal === 'gain') return { goal, source: 'set' }
-  const w = Number(weight), t = Number(targetW)
-  if (Number.isFinite(w) && w > 0 && Number.isFinite(t)) {
+  const w = Number(weight)
+  // Number(null) is 0, which would look like a goal weight of nothing.
+  const t = targetW == null || targetW === '' ? NaN : Number(targetW)
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(t) && t > 0) {
     if (t < w - 0.05) return { goal: 'lose', source: 'targetW' }
     if (t > w + 0.05) return { goal: 'gain', source: 'targetW' }
     return { goal: 'maintain', source: 'targetW' }
@@ -170,7 +174,8 @@ export function nutritionTargets({
     method = 'katch'
   } else {
     const cm = Number(heightCm)
-    const years = Number(age)
+    // null is a missing birthday. Number(null) is 0, which would invent a newborn.
+    const years = age == null || age === '' ? NaN : Number(age)
     if (!(cm > 0) || !Number.isFinite(years) || years < 0) return null
     let base = 10 * kg + 6.25 * cm - 5 * years - 161
     if (sex === 'male') base += 166
@@ -222,6 +227,47 @@ export function profileTargets(S, today = new Date()) {
     customFat: nutrition.customFat,
   })
   return { nutrition, goal: inferred.goal, goalSource: inferred.source, weightKg, targets }
+}
+
+/** Why the settings page can or cannot show a target. `missing` is weight, height, or birthday. */
+export function targetExplain(S, today = new Date()) {
+  const r = profileTargets(S, today)
+  const fat = latestBodyFatFraction(S)
+  if (!r.targets) {
+    if (r.weightKg == null) return { ok: false, missing: 'weight' }
+    if (!fat && r.nutrition.heightCm == null) return { ok: false, missing: 'height' }
+    if (!fat && r.nutrition.birthday == null) return { ok: false, missing: 'birthday' }
+    return { ok: false, missing: 'stats' }
+  }
+  return {
+    ok: true,
+    kcal: r.targets.kcal,
+    protein: r.targets.protein,
+    carbs: r.targets.carbs,
+    fat: r.targets.fat,
+    goal: r.goal,
+    goalSource: r.goalSource,
+    weeklyKg: r.targets.weeklyKg,
+    sexAssumed: r.targets.sexAssumed,
+    method: r.targets.method,
+    customKcal: r.nutrition.customKcal != null,
+    heightCm: r.nutrition.heightCm,
+  }
+}
+
+/** A weekly rate stored in kg, shown in the profile's weight unit. */
+export function weeklyInUnit(kg, unit) {
+  if (kg == null || !Number.isFinite(Number(kg))) return null
+  const n = Number(kg)
+  return unit === 'lb' ? Math.round((n / LB_TO_KG) * 100) / 100 : Math.round(n * 100) / 100
+}
+
+/** A weekly rate typed in the profile's unit, stored in kg. */
+export function weeklyFromUnit(value, unit) {
+  if (value == null || !Number.isFinite(Number(value))) return null
+  const n = Number(value)
+  const kg = unit === 'lb' ? n * LB_TO_KG : n
+  return Math.round(kg * 1000) / 1000
 }
 
 /** Breakfast before 11:00, lunch before 15:00, dinner before 21:00, otherwise a snack. Local time. */

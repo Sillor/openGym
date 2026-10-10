@@ -2244,4 +2244,8 @@ export default {
   'Your sports watch, calling you back.': 'A sportórád visszahív.',
   'Coach wants you back on the bar.': 'Az edző visszavár a rúdhoz.',
   'Gentle, for headphones or a quiet room.': 'Halk, fülhallgatóhoz vagy csendes helyre.',
+
+  // --- nutrition ---
+  'Nutrition': 'Táplálkozás',
+  'Nutrition card': 'Táplálkozás kártya',
 }

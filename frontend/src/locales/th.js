@@ -2252,4 +2252,8 @@ export default {
   'Your sports watch, calling you back.': 'นาฬิกาสปอร์ตเรียกคุณกลับมาแล้ว',
   'Coach wants you back on the bar.': 'โค้ชอยากให้คุณกลับมาที่บาร์',
   'Gentle, for headphones or a quiet room.': 'เบา ๆ สำหรับหูฟังหรือห้องที่เงียบ',
+
+  // --- nutrition ---
+  'Nutrition': 'โภชนาการ',
+  'Nutrition card': 'การ์ดโภชนาการ',
 }

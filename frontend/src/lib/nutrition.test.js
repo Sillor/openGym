@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ageYears, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, scaleToGrams,
+  ageYears, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, scaleToGrams, targetExplain, weeklyFromUnit, weeklyInUnit,
 } from './nutrition.js'
 
 // Male, 30, 180 cm, 80 kg, moderate, maintain. Mifflin then the moderate multiplier.
@@ -89,6 +89,7 @@ describe('inferGoal', () => {
     expect(inferGoal({ coachGoal: 'muscle' })).toEqual({ goal: 'gain', source: 'coach' })
     expect(inferGoal({ coachGoal: 'strength' })).toEqual({ goal: 'maintain', source: 'default' })
     expect(inferGoal({})).toEqual({ goal: 'maintain', source: 'default' })
+    expect(inferGoal({ weight: 80, targetW: null })).toEqual({ goal: 'maintain', source: 'default' })
   })
 })
 
@@ -123,6 +124,43 @@ describe('profileTargets', () => {
   })
 })
 
+describe('targetExplain', () => {
+  const ready = {
+    unit: 'kg',
+    bodyweight: [{ d: '2026-10-01', w: 80, t: 1 }],
+    nutrition: { heightCm: 180, birthday: '1996-01-15', sex: 'male', activity: 'moderate', goal: 'lose', weeklyKg: 0.5 },
+  }
+  it('names what is missing', () => {
+    expect(targetExplain({ unit: 'kg', nutrition: { heightCm: 180, birthday: '1996-01-15' } }, '2026-10-10').missing).toBe('weight')
+    expect(targetExplain({ ...ready, nutrition: { birthday: '1996-01-15', sex: 'male' } }, '2026-10-10').missing).toBe('height')
+    expect(targetExplain({ ...ready, nutrition: { heightCm: 180, sex: 'male' } }, '2026-10-10').missing).toBe('birthday')
+  })
+  it('reports a ready target, and a custom calorie target as the person’s own', () => {
+    const x = targetExplain(ready, '2026-10-10')
+    expect(x.ok).toBe(true)
+    expect(x.kcal).toBe(2057)
+    expect(x.method).toBe('mifflin')
+    expect(x.sexAssumed).toBe(false)
+    expect(targetExplain({ ...ready, nutrition: { ...ready.nutrition, customKcal: 1800 } }, '2026-10-10').customKcal).toBe(true)
+  })
+  it('keeps the formula when a custom target was never set', () => {
+    const x = targetExplain({
+      ...ready,
+      targetW: null,
+      nutrition: { ...ready.nutrition, goal: null, weeklyKg: null, customKcal: null, customProtein: null, customCarbs: null, customFat: null },
+    }, '2026-10-10')
+    expect(x.ok).toBe(true)
+    expect(x.kcal).toBe(2607)
+    expect(x.customKcal).toBe(false)
+    expect(x.goal).toBe('maintain')
+    expect(x.goalSource).toBe('default')
+  })
+  it('converts a weekly rate at the edge', () => {
+    expect(weeklyInUnit(0.5, 'kg')).toBe(0.5)
+    expect(weeklyFromUnit(weeklyInUnit(0.5, 'lb'), 'lb')).toBeCloseTo(0.5, 2)
+  })
+})
+
 describe('nutritionOf', () => {
   it('fills defaults and drops junk', () => {
     const n = nutritionOf({ nutrition: { heightCm: 10, sex: 'other', activity: 'nope', likes: ['  oats ', '', 'oats', 'x'.repeat(200)], note: '  hi  ' } })
@@ -136,6 +174,13 @@ describe('nutritionOf', () => {
   it('keeps a real profile', () => {
     const n = nutritionOf({ nutrition: { heightCm: 178, birthday: '1990-05-01', sex: 'female', goal: 'lose', weeklyKg: 0.25, wontEat: ['pork'] } })
     expect(n).toMatchObject({ heightCm: 178, birthday: '1990-05-01', sex: 'female', goal: 'lose', weeklyKg: 0.25, wontEat: ['pork'] })
+  })
+  it('leaves an empty custom target and weekly rate empty', () => {
+    const n = nutritionOf({ nutrition: { customKcal: null, customProtein: null, weeklyKg: null, heightCm: null } })
+    expect(n.customKcal).toBeNull()
+    expect(n.customProtein).toBeNull()
+    expect(n.weeklyKg).toBeNull()
+    expect(n.heightCm).toBeNull()
   })
 })
 
