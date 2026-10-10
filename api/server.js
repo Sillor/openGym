@@ -16,6 +16,7 @@ import webpush from 'web-push';
 import * as coachConfig from './coach/config.js';
 import * as coachJobs from './coach/jobs.js';
 import { coachRoutes } from './coach/routes.js';
+import { analyzeNutrition } from './coach/core/food-vision.js';
 import { startCadence } from './coach/cadence.js';
 import { startWarmup } from './coach/warmup.js';
 import { dayReminderPush, nudgePush, restTimerPush, testPush } from './push-messages.js';
@@ -2574,6 +2575,19 @@ const routes = {
   // them: they are closures over db and SECRET, and passing them in keeps that module free of
   // a cycle. Every one of them is inert while the feature is unconfigured.
   ...coachRoutes({ json, readBody, readSession, requireAdmin }),
+
+  /* ---------- nutrition analysis ---------- */
+  // Photo or text in, estimated meals out. The image bytes are handed to the instance's Coach
+  // provider and then dropped: they are not written into coach.json, a user's state, or DATA_DIR.
+  // A spawned CLI (Claude, Codex) cannot see a photo; text still uses the provider that already
+  // answers the Coach. NUTRITION_ANALYZE_CAP (default 50) is the per-profile daily ceiling.
+  'POST /api/nutrition/analyze': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    const out = await analyzeNutrition({ uid: user.id, body });
+    json(res, out.status, out.body);
+  },
 
   /* ---------- photos & videos ---------- */
   // Absent, not refusing, when MEDIA_UPLOADS=0: a 404 is what a server from before the feature

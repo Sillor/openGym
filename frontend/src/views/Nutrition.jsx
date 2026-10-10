@@ -1,5 +1,7 @@
 // The day diary. A photo is the first action; typing a meal always works, with or without a model.
-// The vision call fills this sheet later. Until then a photo is kept and the numbers are typed.
+// When the instance coach is on, the photo or a short description is sent to /api/nutrition/analyze
+// and the sheet opens with the estimate, ready to correct. The photo kept on the meal is a hash,
+// never the bytes that were sent.
 
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -8,6 +10,8 @@ import { useUI } from '../store/useUI.js'
 import { t } from '../lib/i18n.js'
 import { fmtDate, fmtNum, isoOf, todayISO, uid } from '../lib/format.js'
 import { cleanMeal, dayTotals, mealFromTime, nutritionOf, profileTargets, MEALS } from '../lib/nutrition.js'
+import { analyzeFood, foodImageFromFile } from '../lib/food-analyze.js'
+import { coachAvailable } from '../lib/coach.js'
 import { useMediaPicker } from '../components/CustomMediaField.jsx'
 import { useMediaUrl } from '../components/CustomMedia.jsx'
 import { mediaStore } from '../lib/media-store.js'
@@ -59,14 +63,20 @@ function MacroLine({ label, value, target, color }) {
   </div>
 }
 
-function MealSheet({ day, entry, source, media: initialMedia, close }) {
+function fillOf(entry, fill) {
+  if (entry) return entry
+  return fill || {}
+}
+
+function MealSheet({ day, entry, source, media: initialMedia, fill, close }) {
   const update = useStore(s => s.update)
-  const [name, setName] = useState(entry?.name || '')
-  const [kcal, setKcal] = useState(entry ? entry.kcal : null)
-  const [protein, setProtein] = useState(entry ? entry.protein : null)
-  const [carbs, setCarbs] = useState(entry ? entry.carbs : null)
-  const [fat, setFat] = useState(entry ? entry.fat : null)
-  const [grams, setGrams] = useState(entry?.grams ?? null)
+  const seed = fillOf(entry, fill)
+  const [name, setName] = useState(entry?.name || seed.name || '')
+  const [kcal, setKcal] = useState(entry ? entry.kcal : seed.kcal ?? null)
+  const [protein, setProtein] = useState(entry ? entry.protein : seed.protein ?? null)
+  const [carbs, setCarbs] = useState(entry ? entry.carbs : seed.carbs ?? null)
+  const [fat, setFat] = useState(entry ? entry.fat : seed.fat ?? null)
+  const [grams, setGrams] = useState(entry ? (entry.grams ?? null) : (seed.grams ?? null))
   const [meal, setMeal] = useState(entry?.meal || mealFromTime(new Date()))
   const [note, setNote] = useState(entry?.note || '')
   const [media, setMedia] = useState(initialMedia || entry?.media || [])
@@ -168,11 +178,36 @@ export function openMealSheet(opts) {
   useUI.getState().openSheet(close => <MealSheet {...opts} close={close} />)
 }
 
+function serverCoach() {
+  const { user, config, coachLocal } = useStore.getState()
+  return coachAvailable(config, user, { mobile: false, coachMode: coachLocal?.mode }) && !!(user && config?.coach?.enabled)
+}
+
+function analysisNote(error, photo) {
+  if (error === 'cap') return t('Today’s read limit is used up. Type the meal instead.')
+  if (error === 'parse') return photo ? t('That photo could not be read. Type the meal instead.') : t('That description could not be read. Type the meal instead.')
+  if (error === 'auth') return t('Sign in, and turn the coach on, to read a meal. You can still type it.')
+  return photo ? t('The coach can’t read this photo. Type the meal instead.') : t('The coach can’t read that. Type the meal instead.')
+}
+
+async function readMeal({ text, images, photo }) {
+  if (!serverCoach()) {
+    useUI.getState().toast(t('Turn the coach on to read a meal. You can still type it.'))
+    return null
+  }
+  useUI.getState().toast(photo ? t('Reading the photo…') : t('Reading that…'))
+  const out = await analyzeFood({ text, images })
+  if (!out.ok) { useUI.getState().toast(analysisNote(out.error, photo)); return null }
+  return out.item
+}
+
 export default function Nutrition() {
   const nav = useNavigate()
   const location = useLocation()
   const S = useStore(s => s.S)
   const [day, setDay] = useState(todayISO())
+  const [desc, setDesc] = useState('')
+  const [reading, setReading] = useState(false)
   const picker = useMediaPicker()
   const once = useRef(false)
 
@@ -185,7 +220,30 @@ export default function Nutrition() {
     const file = await chooseImage(capture)
     if (!file) return
     const got = await picker.pick(file)
-    openMealSheet({ day: forDay, source: 'photo', media: got ? [got] : [] })
+    let fill = null
+    if (serverCoach()) {
+      setReading(true)
+      try {
+        const image = await foodImageFromFile(file)
+        fill = await readMeal({ images: [image], text: desc, photo: true })
+      } catch {
+        useUI.getState().toast(t('That photo could not be read. Type the meal instead.'))
+      } finally { setReading(false) }
+    } else {
+      useUI.getState().toast(t('Turn the coach on to read a photo. You can still type the meal.'))
+    }
+    openMealSheet({ day: forDay, source: got ? 'photo' : 'manual', media: got ? [got] : [], fill })
+  }
+
+  const estimate = async () => {
+    const text = desc.trim()
+    if (!text) { openMealSheet({ day, source: 'manual' }); return }
+    setReading(true)
+    let fill = null
+    try { fill = await readMeal({ text, photo: false }) }
+    finally { setReading(false) }
+    openMealSheet({ day, source: fill ? 'text' : 'manual', fill: fill || { name: text } })
+    if (fill) setDesc('')
   }
 
   useEffect(() => {
@@ -238,8 +296,13 @@ export default function Nutrition() {
         <MacroLine label={t('Fat')} value={totals.fat} target={targets?.fat || 0} color="var(--green)" />
       </div>
       <div className="row" style={{ gap: 8, marginTop: 14 }}>
-        <Button variant="primary" icon="camera" onClick={() => shoot(true, day)} disabled={picker.busy}>{t('Photo')}</Button>
-        <Button icon="image" onClick={() => shoot(false, day)} disabled={picker.busy}>{t('Gallery')}</Button>
+        <Button variant="primary" icon="camera" onClick={() => shoot(true, day)} disabled={picker.busy || reading}>{t('Photo')}</Button>
+        <Button icon="image" onClick={() => shoot(false, day)} disabled={picker.busy || reading}>{t('Gallery')}</Button>
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 8, alignItems: 'stretch' }}>
+        <TextField aria-label={t('Describe a meal')} value={desc} placeholder={t('2 eggs and toast')} onChange={e => setDesc(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') estimate() }} />
+        <Button onClick={estimate} disabled={reading}>{t('Estimate')}</Button>
       </div>
       <div style={{ height: 8 }} />
       <Button onClick={() => openMealSheet({ day, source: 'manual' })}>{t('Add manually')}</Button>

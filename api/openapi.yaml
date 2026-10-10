@@ -2953,6 +2953,101 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /api/nutrition/analyze:
+    post:
+      tags: [coach]
+      operationId: postNutritionAnalyze
+      summary: Estimate a meal from a photo or a description
+      description: |
+        Uses this instance's Coach provider and key. Image bytes are sent to that provider
+        and are not stored. CLI providers (Claude, Codex) accept text only; a photo returns
+        `provider` and is not sent. Each profile may call it `NUTRITION_ANALYZE_CAP` times
+        per UTC day (default 50). Over the cap the answer is 429 `cap`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  maxLength: 8000
+                images:
+                  type: array
+                  maxItems: 3
+                  items:
+                    type: object
+                    required: [mime, base64]
+                    properties:
+                      mime: { type: string, enum: [image/jpeg, image/png, image/webp, image/gif] }
+                      base64: { type: string, description: Raw base64, not a data URL. }
+      responses:
+        '200':
+          description: Parsed meals. kcal is an integer; protein, carbs, fat, and grams are one decimal.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, items]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, kcal, protein, carbs, fat, grams]
+                      properties:
+                        name: { type: string }
+                        kcal: { type: integer }
+                        protein: { type: number }
+                        carbs: { type: number }
+                        fat: { type: number }
+                        grams: { type: number }
+                        ingredients:
+                          type: array
+                          items:
+                            type: object
+                            required: [name, kcal, protein, carbs, fat, grams]
+                            properties:
+                              name: { type: string }
+                              kcal: { type: integer }
+                              protein: { type: number }
+                              carbs: { type: number }
+                              fat: { type: number }
+                              grams: { type: number }
+        '400':
+          description: Nothing to analyze, a bad image, or this provider cannot read photos.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "provider" }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: The model answered, but not with usable nutrition JSON.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "parse" }
+        '429':
+          description: This profile is over the daily analysis cap.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "cap" }
+        '502':
+          description: The provider call failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "provider" }
+        '503':
+          description: The Coach provider is not set up for this profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "provider" }
+
 components:
   securitySchemes:
     cookieAuth:
