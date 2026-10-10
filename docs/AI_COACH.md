@@ -247,7 +247,7 @@ archive.
 
 `api/coach/payload.js` is built as an allowlist: every field is copied in **by name**, nothing
 is spread and nothing is passed through, so a field added to the state blob next year cannot
-ride along by accident. The five categories it can send — the same list the consent screen
+ride along by accident. The categories it can send — the same list the consent screen
 renders from, so the screen cannot drift from the payload — are:
 
 | Category | What it covers |
@@ -255,6 +255,7 @@ renders from, so the screen cannot drift from the payload — are:
 | `plan` | routines, exercises, sets/reps, schedule, progression settings |
 | `training` | logged sets, targets, effort ratings, durations, PRs and session notes in the review window |
 | `bodyweight` | weigh-ins in the window and your goal weight |
+| `nutrition` | daily totals and targets for the review window, today's meal names, and food preferences — not photos, not the vision prompt. Review and debrief only |
 | `profile` | the intake answers you gave the Coach, including any limitations |
 | `cohort` (optional) | only with comparison on and your own opt-in: anonymous medians from the other people sharing — never their data, and never yours to them beyond the same medians |
 | `prefs` | unit, language, effort scale |

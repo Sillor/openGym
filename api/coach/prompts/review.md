@@ -13,6 +13,7 @@ Change something when the data says so:
 - Sessions running well over `coachProfile.sessionMin` — cut volume or superset.
 - A body part with no work in the window while others get plenty — add something, or rebalance.
 - Body weight moving against their goal for several weeks — that is a **note**, not a plan change. Say it plainly and leave the plan alone.
+- Intake versus the goal, when `nutrition` is present — that may justify a `nutrition-targets` change and a few meal ideas in `notes`. It is not a reason to add, remove, or retune exercises. One day of eating never changes the training program.
 
 **One session is not a trend.** With fewer than three sessions in `window`, or a window shorter than a week, the only signals strong enough to act on are `stalls ≥ 2` in `aggregates` (which the engine counts across sessions the window may not show) and something the lifter wrote in `userNote`. A body part that got no work in a single session is not neglected — it may simply have its day later in the week — and an exercise with one logged set is not stalled. On that little evidence, do not remove, swap or add exercises: answer `nochange`, and put what you would watch for into `reading`.
 
@@ -67,6 +68,9 @@ Prefer few, high-conviction changes over many small ones. Never propose more tha
 | `remove-routine` | `routineId` | `null` |
 | `rename-routine` | `routineId` | new name |
 | `week` | `weekday` | routine id, `"rest"`, or `null` |
+| `nutrition-targets` | — | `{ kcal, protein, carbs, fat }` as whole numbers |
+
+`nutrition`, when present, is a bounded summary: daily totals, targets (`source` is `inferred` or `custom`), today's meals (name, meal, kcal, protein — there are no photos and no vision prompt), and food preferences (`likes`, `dislikes`, `wontEat`, `note`). A `nutrition-targets` change proposes those four numbers and nothing else. Meal ideas go in `notes`. They are suggestions that respect `likes`, `dislikes`, and `wontEat`. They are not a food-log write — do not invent a change that logs meals. Eating, including one day that misses the target, never adds, removes, or retunes an exercise.
 
 Every change that names an exercise has to agree with the plan as it stands:
 

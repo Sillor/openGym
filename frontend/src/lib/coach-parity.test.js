@@ -89,3 +89,50 @@ describe('routine glyphs', () => {
     })
   })
 })
+
+// The api cannot import the Vite app, so the calorie formula is copied. These pin the copy
+// against profileTargets — the function the diary actually shows.
+import { profileTargets } from './nutrition.js'
+import { nutritionSummary } from '../../../api/coach/core/nutrition.js'
+
+describe('server nutrition targets match the app', () => {
+  const today = '2026-10-10'
+  const base = (over = {}) => ({
+    unit: 'kg',
+    bodyweight: [{ d: '2026-10-01', w: 80, t: 1 }],
+    nutrition: { heightCm: 180, birthday: '1996-01-15', sex: 'male', activity: 'moderate', goal: 'maintain' },
+    foodLog: [],
+    ...over,
+  })
+  const same = (S) => {
+    const ui = profileTargets(S, today)
+    const srv = nutritionSummary(S, '2026-10-01', today, today)
+    expect(srv.targets.kcal).toBe(ui.targets.kcal)
+    expect(srv.targets.protein).toBe(ui.targets.protein)
+    expect(srv.targets.carbs).toBe(ui.targets.carbs)
+    expect(srv.targets.fat).toBe(ui.targets.fat)
+    return srv
+  }
+
+  it('male 30, 180cm, 80kg, moderate, maintain is 2607 / 128 / 415 / 48, inferred', () => {
+    const srv = same(base())
+    expect(srv.targets).toEqual({ kcal: 2607, protein: 128, carbs: 415, fat: 48, source: 'inferred' })
+    expect(srv.inputs.age).toBe(30)
+  })
+
+  it('a custom calorie target is custom on both sides, and the other macros stay on the formula', () => {
+    const S = base()
+    S.nutrition = { ...S.nutrition, customKcal: 2200 }
+    const srv = same(S)
+    expect(srv.targets.source).toBe('custom')
+    expect(srv.targets.kcal).toBe(2200)
+    expect(srv.targets.protein).toBe(128)
+  })
+
+  it('body fat switches both sides to the same Katch numbers', () => {
+    const S = base({ measurements: [{ d: '2026-10-01', bodyFat: 20, t: 1 }] })
+    const srv = same(S)
+    expect(profileTargets(S, today).targets.method).toBe('katch')
+    expect(srv.targets.source).toBe('inferred')
+  })
+})

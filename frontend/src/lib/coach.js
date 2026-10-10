@@ -23,7 +23,9 @@ import { t, tn } from './i18n.js'
 // Bumping this re-prompts everyone: it means what we share, or who we share it with, changed.
 // 2: the training line names the session notes, which the payload carries and version 1 never
 // mentioned.
-export const CONSENT_VERSION = 2
+// 3: a nutrition category — daily totals, targets, today's meal names, and food preferences.
+//    Photos and the vision prompt stay on the device.
+export const CONSENT_VERSION = 3
 
 // Bounds. The whole state has to stay inside the server's 5 MB body limit, and a Coach log
 // that grows forever is exactly the kind of thing that eats it invisibly. Worst case here is
@@ -71,6 +73,7 @@ export const CATEGORY_TEXT = {
   plan: () => [t('Your plan'), t('Routines, exercises, sets and reps, your weekly schedule and progression settings.')],
   training: () => [t('Your logged training'), t('Sets you logged in the review window: weights, reps, times, effort ratings, how long sessions took, and your session notes.')],
   bodyweight: () => [t('Body weight'), t('Weigh-ins from the same window, and your goal weight if you set one.')],
+  nutrition: () => [t('Food'), t('Daily totals and targets for the review window, today\'s meal names, and food preferences — not photos, not the vision prompt.')],
   profile: () => [t('What you tell the Coach'), t('Your intake answers, including any limitations or injuries you describe.')],
   prefs: () => [t('A few preferences'), t('Your unit, your language and which effort scale you log.')]
 }
@@ -179,7 +182,9 @@ export function markStale(proposal, S) {
   const changes = (proposal.changes || []).map(c => {
     const r = c.target?.routineId ? findRoutine(S, c.target.routineId) : null
     let stale = false
-    if (c.type !== 'add-routine' && c.type !== 'week' && !r) stale = true
+    // A target proposal is not a plan edit. A missing routine must not grey it out.
+    if (c.type === 'nutrition-targets') stale = false
+    else if (c.type !== 'add-routine' && c.type !== 'week' && !r) stale = true
     else if (c.target?.exId && !findEx(r, c.target.exId)) stale = true
     else if (c.type === 'week') {
       // The day's value is a routine-id list; `before` may be a list (a combined day) or a
@@ -279,6 +284,10 @@ export function revertLast(s) {
   s.week = clone(snap.week)
   // Snapshots taken before this field existed have nothing to put back.
   if (snap.dayPlanRestore) Object.assign(s.dayPlan, snap.dayPlanRestore)
+  if (Object.prototype.hasOwnProperty.call(snap, 'nutrition')) {
+    if (snap.nutrition == null) delete s.nutrition
+    else s.nutrition = clone(snap.nutrition)
+  }
   appendLog(s, { kind: 'revert', at: Date.now(), proposalId: snap.proposalId, summary: t('Reverted the last Coach changes.') })
   return true
 }
@@ -535,12 +544,30 @@ const CHANGE_APPLY = {
     const d = c.target.weekday
     if (c.after == null || c.after === 'rest') delete s.week[d]
     else s.week[d] = [c.after]
+  },
+  // Whole-number targets, same bounds as frontend/src/lib/nutrition.js nutritionOf.
+  // Keeps every other nutrition field. Does not write S.foodLog.
+  'nutrition-targets': (s, c) => {
+    const a = c.after || {}
+    const kcal = intIn(a.kcal, 0, 20000)
+    const protein = intIn(a.protein, 0, 1000)
+    const carbs = intIn(a.carbs, 0, 2000)
+    const fat = intIn(a.fat, 0, 1000)
+    if (kcal == null || protein == null || carbs == null || fat == null) throw new Error('bad nutrition targets')
+    const snaps = coachOf(s).snapshots
+    const snap = snaps && snaps[snaps.length - 1]
+    if (snap && !Object.prototype.hasOwnProperty.call(snap, 'nutrition')) {
+      snap.nutrition = clone(s.nutrition === undefined ? null : s.nutrition)
+    }
+    const prev = s.nutrition && typeof s.nutrition === 'object' ? s.nutrition : {}
+    s.nutrition = { ...prev, customKcal: kcal, customProtein: protein, customCarbs: carbs, customFat: fat }
   }
 }
 export const CHANGE_TYPES = Object.keys(CHANGE_APPLY)
 
 function findExIn(s, c) { return findEx(findRoutine(s, c.target.routineId), c.target.exId) }
 function need(x) { if (!x) throw new Error('missing target'); return x }
+function intIn(v, lo, hi) { return Number.isInteger(v) && v >= lo && v <= hi ? v : null }
 
 /**
  * Apply the accepted subset, atomically (FR-30).
@@ -630,6 +657,7 @@ export function changeTitle(c, S) {
     case 'remove-routine': return t('Remove a routine')
     case 'rename-routine': return t('Rename routine to “{0}”', c.after)
     case 'week': return Number.isInteger(c.target?.weekday) ? t('{0}: what’s planned', t(DAYN[c.target.weekday])) : t('Change what’s planned on one day')
+    case 'nutrition-targets': return t('Calorie and macro targets')
     default: return c.type
   }
 }
@@ -652,5 +680,11 @@ export function changeValues(c, S) {
   }
   if (['add-exercise', 'add-routine', 'reorder'].includes(c.type)) return null
   if (['remove-exercise', 'remove-routine'].includes(c.type)) return null
+  if (c.type === 'nutrition-targets') {
+    const line = v => (v && typeof v === 'object')
+      ? `${v.kcal} kcal · ${v.protein} g protein · ${v.carbs} g carbs · ${v.fat} g fat`
+      : '–'
+    return { before: line(c.before), after: line(c.after) }
+  }
   return { before: fmt(c.before), after: fmt(c.after) }
 }

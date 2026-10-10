@@ -12,6 +12,7 @@
  */
 import { glyphStr } from './glyphs.js';
 import { LIBRARY, LIB_BY_ID, libraryHas, libraryName, librarySlice, isStretch, MAX_LIBRARY } from './library.js';
+import { nutritionSummary } from './nutrition.js';
 
 export const CONTRACT = 1;
 // Bounds from FR-22. A review reads a training block, not a training career: more history
@@ -421,6 +422,64 @@ function cleanWorkout(w) {
   };
 }
 
+/* Nutrition rides on a review or a debrief only, and only the fields named here. A create
+   payload never carries it: a plan is not retuned from a food log. `opts.categories`, when
+   passed, is the consent list — omit `nutrition` and this stays off. */
+function categoryOn(opts, name) {
+  if (!opts.categories) return true;
+  return Array.isArray(opts.categories) && opts.categories.includes(name);
+}
+
+const finiteOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** Allowlisted nutrition summary for [from, to]. Nothing else on the food log is copied. */
+export function cleanNutrition(S, from, to, today) {
+  const n = nutritionSummary(S, from, to, today) || {};
+  const t = n.targets && typeof n.targets === 'object' ? n.targets : null;
+  const i = n.inputs && typeof n.inputs === 'object' ? n.inputs : {};
+  const out = {
+    window: {
+      from: typeof n.window?.from === 'string' ? n.window.from : null,
+      to: typeof n.window?.to === 'string' ? n.window.to : null
+    },
+    targets: t ? {
+      kcal: finiteOrNull(t.kcal),
+      protein: finiteOrNull(t.protein),
+      carbs: finiteOrNull(t.carbs),
+      fat: finiteOrNull(t.fat),
+      source: t.source === 'custom' ? 'custom' : 'inferred'
+    } : null,
+    inputs: {
+      weightKg: finiteOrNull(i.weightKg),
+      heightCm: finiteOrNull(i.heightCm),
+      goal: i.goal === 'lose' || i.goal === 'maintain' || i.goal === 'gain' ? i.goal : null,
+      activity: typeof i.activity === 'string' ? i.activity.slice(0, 20) : null,
+      sex: i.sex === 'male' || i.sex === 'female' ? i.sex : null,
+      age: finiteOrNull(i.age)
+    },
+    days: list(n.days).filter(d => d && typeof d === 'object').slice(0, 28).map(d => ({
+      d: day(d.d),
+      kcal: finiteOrNull(d.kcal) ?? 0,
+      protein: finiteOrNull(d.protein) ?? 0,
+      carbs: finiteOrNull(d.carbs) ?? 0,
+      fat: finiteOrNull(d.fat) ?? 0,
+      meals: finiteOrNull(d.meals) ?? 0
+    })),
+    today: list(n.today).filter(m => m && typeof m === 'object').slice(0, 12).map(m => ({
+      name: text(m.name, 80),
+      meal: typeof m.meal === 'string' ? m.meal.slice(0, 20) : 'snack',
+      kcal: finiteOrNull(m.kcal) ?? 0,
+      protein: finiteOrNull(m.protein) ?? 0
+    })),
+    likes: list(n.likes).filter(x => typeof x === 'string').slice(0, 40).map(x => x.slice(0, 80)),
+    dislikes: list(n.dislikes).filter(x => typeof x === 'string').slice(0, 40).map(x => x.slice(0, 80)),
+    wontEat: list(n.wontEat).filter(x => typeof x === 'string').slice(0, 40).map(x => x.slice(0, 80)),
+    note: text(n.note, NOTE_MAX)
+  };
+  if (typeof n.energy === 'string' && n.energy) out.energy = n.energy.slice(0, 240);
+  return out;
+}
+
 /** The body-weight series between two days, each weigh-in a date and a number. */
 function weighIns(S, from, to) {
   return list(S.bodyweight)
@@ -578,6 +637,14 @@ export function build(S, opts = {}) {
       // revision of a plan that does not exist — refine.md would be reading `previous: null`.
       p.userNote = String(opts.refine).slice(0, MAX_NOTE_CHARS);
     }
+  }
+  // Food is a review/debrief reading. A create payload has no nutrition key at all — one day
+  // of eating is not an input to a new training plan.
+  if ((opts.kind === 'review' || opts.kind === 'debrief') && categoryOn(opts, 'nutrition')) {
+    const today = p.meta.today;
+    const end = opts.kind === 'debrief' ? (p.session?.d || today) : today;
+    const start = opts.kind === 'review' ? (p.window?.from || null) : null;
+    p.nutrition = cleanNutrition(S, start, end, today);
   }
   if (opts.kind !== 'debrief') {
     const said = conversation(coach, [opts.note, opts.refine]);

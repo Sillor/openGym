@@ -33,7 +33,8 @@ export const CHANGE_TYPES = [
   'reorder', 'superset',
   'routine-prog', 'exercise-prog', 'inc',
   'add-routine', 'remove-routine', 'rename-routine',
-  'week'
+  'week',
+  'nutrition-targets'
 ];
 const POLICIES = ['off', 'linear', 'greyskull', 'double', 'triple', 'time'];
 const MODES = ['reps', 'time', 'cardio'];
@@ -285,7 +286,7 @@ export function validateReview(data, plan, ctx = {}) {
 
     // Targets: everything but add-routine and week must name a routine that exists; anything
     // touching an exercise must name one that is actually in it.
-    if (!['add-routine', 'week'].includes(c.type)) {
+    if (!['add-routine', 'week', 'nutrition-targets'].includes(c.type)) {
       if (!routine) { errors.push(`${where}.target.routineId "${target.routineId}" is not one of the routines in the plan`); return; }
     }
     const needsEx = ['remove-exercise', 'swap-exercise', 'sets', 'reps', 'repsMin', 'repsMax', 'sec', 'cardio', 'exercise-prog', 'inc', 'superset'];
@@ -476,6 +477,22 @@ export function validateReview(data, plan, ctx = {}) {
           errors.push(`${where}.after must be a routine id from the plan, "rest", or null`); return;
         }
         out.after = c.after ?? null;
+        break;
+      }
+      case 'nutrition-targets': {
+        // Calorie and macro targets only. A meal idea is a note, not this change, and nothing
+        // here may name a food-log write.
+        const a = c.after;
+        const kcal = a && isInt(a.kcal, 0, 20000) ? a.kcal : null;
+        const protein = a && isInt(a.protein, 0, 1000) ? a.protein : null;
+        const carbs = a && isInt(a.carbs, 0, 2000) ? a.carbs : null;
+        const fat = a && isInt(a.fat, 0, 1000) ? a.fat : null;
+        if (kcal == null || protein == null || carbs == null || fat == null) {
+          errors.push(`${where}.after must be { kcal, protein, carbs, fat } as whole numbers (kcal 0–20000, protein 0–1000, carbs 0–2000, fat 0–1000)`);
+          return;
+        }
+        out.target = {};
+        out.after = { kcal, protein, carbs, fat };
         break;
       }
     }

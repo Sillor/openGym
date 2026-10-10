@@ -322,13 +322,23 @@ test('every allowed change type has a validator that accepts a well-formed insta
     'add-routine': change({ type: 'add-routine', target: {}, after: { name: 'C', ex: [{ id: '0001', sets: 3, reps: 10 }] } }),
     'remove-routine': change({ type: 'remove-routine', target: { routineId: 'r2' } }),
     'rename-routine': change({ type: 'rename-routine', target: { routineId: 'r1' }, after: 'Upper' }),
-    week: change({ type: 'week', target: { weekday: 2 }, after: 'r1' })
+    week: change({ type: 'week', target: { weekday: 2 }, after: 'r1' }),
+    'nutrition-targets': change({ type: 'nutrition-targets', target: {}, after: { kcal: 2607, protein: 128, carbs: 415, fat: 48 } })
   };
   for (const type of CHANGE_TYPES) {
     assert.ok(good[type], `no fixture for change type "${type}" — add one`);
     const r = review([good[type]]);
     assert.equal(r.ok, true, `${type} should validate: ${JSON.stringify(r.errors)}`);
   }
+});
+
+test('nutrition-targets needs no routine and refuses a target that is not four whole numbers', () => {
+  const ok = review([change({ type: 'nutrition-targets', target: {}, after: { kcal: 2000, protein: 150, carbs: 200, fat: 60 } })]);
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.deepEqual(ok.proposal.changes[0].after, { kcal: 2000, protein: 150, carbs: 200, fat: 60 });
+  assert.deepEqual(ok.proposal.changes[0].target, {});
+  const bad = review([change({ type: 'nutrition-targets', target: {}, after: { kcal: 2000.5, protein: 150, carbs: 200, fat: 60, meals: [{ name: 'oats' }] } })]);
+  assert.equal(bad.ok, false);
 });
 
 /* ---- ambiguity the closed list did not previously catch ---- */

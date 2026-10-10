@@ -602,6 +602,50 @@ describe('get_bodyweight', () => {
   })
 })
 
+/* ---------- get_nutrition ---------- */
+
+describe('get_nutrition', () => {
+  test('returns targets, day totals and today\'s meals, and never a photo', () => {
+    const HASH = 'ef'.repeat(32)
+    const VISION = 'VISION_PROMPT_do_not_send'
+    S.nutrition = {
+      heightCm: 180, birthday: '1996-01-15', sex: 'male', activity: 'moderate', goal: 'maintain',
+      likes: ['oats'], dislikes: [], wontEat: [], note: '',
+    }
+    S.bodyweight = [{ d: '2026-07-01', w: 80, t: 1 }]
+    S.foodLog = [
+      { id: 'a', d: '2026-07-27', t: 1, name: 'Eggs', kcal: 180, protein: 12, carbs: 1, fat: 14, meal: 'breakfast', media: [{ hash: HASH, data: 'data:image/jpeg;base64,SECRET' }], vision: VISION, grams: 100, source: 'photo' },
+      { id: 'b', d: '2026-01-01', t: 1, name: 'ANCIENT', kcal: 10, protein: 1, carbs: 1, fat: 1, meal: 'snack' },
+    ]
+    _seedStateForTests(S)
+    const r = call('get_nutrition')
+    expect(r.window.to).toBe('2026-07-27')
+    expect(r.today).toEqual([{ name: 'Eggs', meal: 'breakfast', kcal: 180, protein: 12 }])
+    expect(r.days.map(d => d.d)).toEqual(['2026-07-27'])
+    expect(r.days[0]).toMatchObject({ kcal: 180, protein: 12, meals: 1 })
+    expect(r.likes).toEqual(['oats'])
+    expect(r.inputs.weightKg).toBe(80)
+    expect(r.energy).toContain('80 kg')
+    const json = JSON.stringify(r)
+    for (const leak of [HASH, VISION, 'base64', 'ANCIENT', '"media"', '"grams"', '"vision"']) {
+      expect(json).not.toContain(leak)
+    }
+  })
+
+  test('a closed range drops meals outside it, and a future meal is not today', () => {
+    S.foodLog = [
+      { id: 'a', d: '2026-07-01', t: 1, name: 'Early', kcal: 100, protein: 1, carbs: 1, fat: 1, meal: 'snack' },
+      { id: 'b', d: '2026-07-20', t: 1, name: 'Mid', kcal: 200, protein: 2, carbs: 2, fat: 2, meal: 'lunch' },
+      { id: 'c', d: '2099-01-01', t: 1, name: 'Future', kcal: 900, protein: 9, carbs: 9, fat: 9, meal: 'dinner' },
+    ]
+    _seedStateForTests(S)
+    const r = call('get_nutrition', { from: '2026-07-20', to: '2026-07-20' })
+    expect(r.days.map(d => d.d)).toEqual(['2026-07-20'])
+    expect(JSON.stringify(call('get_nutrition'))).not.toContain('Future')
+    expect(call('get_nutrition', { from: '2099-01-01', to: '2099-01-01' }).days.map(d => d.d)).toEqual(['2099-01-01'])
+  })
+})
+
 /* ---------- estimate_1rm ---------- */
 
 describe('estimate_1rm', () => {
@@ -940,6 +984,7 @@ describe('shared: no-state fallback', () => {
       list_workouts: {},
       get_workout: { date: '2026-07-26' },
       get_bodyweight: {},
+      get_nutrition: {},
       estimate_1rm: {},
       muscle_balance: { period: 'all' }
     }
@@ -1287,7 +1332,9 @@ describe('date arguments must be dates the calendar has', () => {
       ['list_workouts', { from: '2026-13-45' }],
       ['list_workouts', { to: '0000-00-00' }],
       ['get_bodyweight', { to: '2026-02-30' }],
-      ['get_bodyweight', { from: '2025-02-29' }]      // 2024 had one, 2025 did not
+      ['get_bodyweight', { from: '2025-02-29' }],     // 2024 had one, 2025 did not
+      ['get_nutrition', { to: '2026-02-30' }],
+      ['get_nutrition', { from: '2025-02-29' }]
     ]) {
       const r = await shot(tool, args)
       const where = `${tool} ${JSON.stringify(args)}`

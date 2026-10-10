@@ -1,4 +1,4 @@
-/* The eight read-only tools. Each handler returns JSON; labels.js pre-substitutes any
+/* The read-only tools. Each handler returns JSON; labels.js pre-substitutes any
    {0}/{1} template the lib returns so the LLM gets final text, not template strings.
    ISO dates are validated on the way in; the handlers never see 'yesterday'. */
 import { z } from 'zod'
@@ -18,6 +18,7 @@ import {
 import { loadOfWorkouts, rankOf, levelsOf } from '../../frontend/src/lib/muscles.js'
 import { policyFor } from '../../frontend/src/lib/progression.js'
 import { buildSessionEntries, startsFromLast } from '../../frontend/src/lib/session-start.js'
+import { nutritionSummary } from '../../api/coach/core/nutrition.js'
 
 /* ---------- helpers ---------- */
 
@@ -409,6 +410,22 @@ export const getBodyweight = {
   }
 }
 
+/** get_nutrition — the same bounded window the Coach review payload sends. Read-only. */
+export const getNutrition = {
+  name: 'get_nutrition',
+  description: 'Get a bounded nutrition summary: calorie and macro targets (inferred or custom), per-day totals, today\'s meals (name, meal, kcal, protein), and food preferences. Same window shape as the Coach review payload, capped at 28 days. Photos, vision prompts, and meal media are never included. Read-only — this does not change targets or the food log.',
+  schema: {
+    from: isoDate().optional().describe('Inclusive start date YYYY-MM-DD. The window is capped at 28 days ending on `to`.'),
+    to: isoDate().optional().describe('Inclusive end date YYYY-MM-DD. Defaults to today.')
+  },
+  handler: ({ from, to }) => {
+    const S = getState()
+    if (!S) return noState()
+    const hi = to || todayIso()
+    return nutritionSummary(S, from || null, hi, todayIso())
+  }
+}
+
 /** estimate_1rm — best-ever 1RM for one exercise or a PR table across all reps-mode exercises. */
 export const estimate1rm = {
   name: 'estimate_1rm',
@@ -673,7 +690,7 @@ export const previewSession = {
 /* ---------- registration list ---------- */
 
 export const TOOLS = [
-  listRoutines, getRoutine, previewSession, getWeekPlan, listWorkouts, getWorkout, getBodyweight, estimate1rm, muscleBalance
+  listRoutines, getRoutine, previewSession, getWeekPlan, listWorkouts, getWorkout, getBodyweight, getNutrition, estimate1rm, muscleBalance
 ]
 
 function noState() {

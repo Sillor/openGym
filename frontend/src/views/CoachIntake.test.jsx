@@ -174,7 +174,7 @@ describe('CoachIntake — the consent screen', () => {
   it('lists the built-in categories first, then whatever the server says actually goes', async () => {
     vi.mocked(disclosure).mockResolvedValue({ categories: ['plan', 'prefs'], providerLabel: 'Anthropic', payer: 'you', host: 'api.anthropic.com' })
     mount()
-    expect(all('.ob-consent-row')).toHaveLength(5)                       // CATEGORY_TEXT, before the call lands
+    expect(all('.ob-consent-row')).toHaveLength(Object.keys(CATEGORY_TEXT).length)  // CATEGORY_TEXT, before the call lands
     await settle()
     expect(all('.ob-consent-row')).toHaveLength(2)
     expect(host.textContent).toContain('Sent straight to api.anthropic.com with your own API key')
@@ -197,7 +197,7 @@ describe('CoachIntake — the consent screen', () => {
     mocks.config = { coach: { enabled: true, providerLabel: 'Claude Agent SDK' } }
     mount(); await settle()
     expect(host.textContent).toContain('Sent to Claude Agent SDK, running on this server')
-    expect(all('.ob-consent-row')).toHaveLength(5)      // and the built-in list stands in
+    expect(all('.ob-consent-row')).toHaveLength(Object.keys(CATEGORY_TEXT).length)  // and the built-in list stands in
 
     act(() => root.unmount())
     mocks.config = { coach: { enabled: true } }
@@ -220,8 +220,11 @@ describe('CoachIntake — the consent screen', () => {
     await setLang('de')
     try {
       mount()
+      // New consent lines ship in English first. A pack that already has the key must use it;
+      // a key the pack does not have yet is the English source, which is what t() shows.
+      const pick = (en) => Object.hasOwn(de, en) ? de[en] : en
       expect(all('.ob-consent-row').map(r => [r.querySelector('b').textContent, r.querySelector('span').textContent]))
-        .toEqual(english.map(([title, sub]) => [de[title], de[sub]]))
+        .toEqual(english.map(([title, sub]) => [pick(title), pick(sub)]))
     } finally { await setLang('en') }
   })
 

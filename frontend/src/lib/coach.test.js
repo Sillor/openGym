@@ -688,6 +688,42 @@ describe('what the log keeps, so a decision never makes a proposal vanish', () =
     expect(logEntry(s, id)).toMatchObject({ kind: 'debrief', score: 8, highlights: ['a'], nextTime: ['b'], workout: { id: 'w1' } })
   })
 
+  it('accepts nutrition targets without touching the plan or the food log, and a decline is recorded the same way', () => {
+    const food = [{ id: 'm1', d: '2026-10-10', name: 'oats', kcal: 300, protein: 10, carbs: 40, fat: 6, meal: 'breakfast' }]
+    const S = state({
+      nutrition: { heightCm: 180, likes: ['oats'], dislikes: [], wontEat: [], note: 'keep' },
+      foodLog: food,
+    })
+    const targets = { kcal: 2200, protein: 150, carbs: 200, fat: 60 }
+    const proposalN = proposal([
+      change({ id: 'c1', type: 'nutrition-targets', target: {}, before: null, after: targets, why: 'intake is under the goal' }),
+      change({ id: 'c2', type: 'sets', after: 5, why: 'not from food' }),
+    ])
+    expect(markStale(proposalN, S).changes.map(c => c.status)).toEqual(['proposed', 'proposed'])
+    const s = JSON.parse(JSON.stringify(S))
+    const res = applyChangeSet(s, proposalN, ['c1'])
+    expect(s.nutrition).toMatchObject({
+      heightCm: 180, likes: ['oats'], note: 'keep',
+      customKcal: 2200, customProtein: 150, customCarbs: 200, customFat: 60,
+    })
+    expect(s.routines[0].ex[0].sets).toBe(3)
+    expect(s.foodLog).toEqual(food)
+    const decisions = logEntry(s, res.logId).decisions
+    expect(decisions.find(d => d.id === 'c1')).toMatchObject({ status: 'accepted', type: 'nutrition-targets', after: targets })
+    expect(decisions.find(d => d.id === 'c2')).toMatchObject({ status: 'rejected', type: 'sets' })
+    expect(changeValues(proposalN.changes[0], s).after).toBe('2200 kcal · 150 g protein · 200 g carbs · 60 g fat')
+    expect(revertLast(s)).toBe(true)
+    expect(s.nutrition.customKcal).toBeUndefined()
+    expect(s.nutrition.likes).toEqual(['oats'])
+    expect(s.foodLog).toEqual(food)
+
+    const dismissed = JSON.parse(JSON.stringify(S))
+    recordDismissal(dismissed, proposalN)
+    expect(dismissed.nutrition.customKcal).toBeUndefined()
+    expect(dismissed.coach.log.at(-1).decisions.every(d => d.status === 'rejected')).toBe(true)
+    expect(dismissed.foodLog).toEqual(food)
+  })
+
   it('lightBundle drops what the card does not show', () => {
     const b = lightBundle({ ...plan, customEx: [{ id: 'z' }], basedOn: 'x' })
     expect(b.customEx).toBeUndefined()

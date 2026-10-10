@@ -19,6 +19,7 @@ import { best1RM } from './onerm.js'
 import { fmtNum } from './format.js'
 import { planHash } from './coach.js'
 import { t } from './i18n.js'
+import { DATA_CATEGORIES } from '../../../api/coach/core/categories.js'
 
 const DELAY = 2200      // long enough to see "the Coach is thinking…", short enough to forgive
 
@@ -209,5 +210,5 @@ export const demoDebrief = (S, workoutId) => {
 export const demoResolve = () => { pending = null; return { ok: true } }
 export const demoDisclosure = () => ({
   provider: 'demo', providerLabel: t('the configured AI provider'),
-  categories: ['plan', 'training', 'bodyweight', 'profile', 'prefs'], version: 1
+  categories: [...DATA_CATEGORIES], version: 1
 })

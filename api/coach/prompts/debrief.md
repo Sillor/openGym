@@ -12,6 +12,7 @@ This is a reading, not a plan. You change nothing, add nothing, and name no exer
 - **Stalls.** `aggregates.exercises[].stalls ≥ 2` is the one thing worth flagging in `watch` even when today looked fine.
 - **Duration and PRs.** `minutes` against the last few sessions; `prs` counts records set today.
 - **Body weight**, only if it is clearly moving against `coachProfile.goal` — one line, in `watch`, no diagnosis.
+- **Food**, only when `nutrition` is present. Intake versus the goal may justify a sentence about calorie and macro targets, and a few meal ideas, in `nextTime` or `watch`. Respect `likes`, `dislikes`, and `wontEat`. Those are notes. They are not a food-log write, and there are no photos or vision prompts in the payload. One day of eating is not a reason to talk about adding, removing, or retuning exercises — a debrief never changes the training program.
 - **Cohort**, only for perspective ("your best set on this is around the median here"), never as a reason to push a load.
 
 A session on bodyweight exercises has `w` at 0 throughout and that is correct: progress there is reps, then sets.

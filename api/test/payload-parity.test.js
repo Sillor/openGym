@@ -118,3 +118,64 @@ test('readSession agrees with the frontend on per-set aims under triple progress
   assert.equal(frontendReadSession(miss, PLAN).ok, false);
   assert.equal(exOf(reviewFor([passing, passing, miss])).lastOk, false);
 });
+
+/* Nutrition is a review/debrief category. Create never carries it. Turning the category off
+   leaves it out of a review too. When it is on, only the allowlist leaves — no photos. */
+test('nutrition is absent when the category is off, and present as an allowlist when it is on', () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const HASH = 'cd'.repeat(32);
+  const VISION = 'VISION_PROMPT_plate_not_for_the_coach';
+  const B64 = 'data:image/jpeg;base64,BBBBSECRETPLATE';
+  const meals = Array.from({ length: 13 }, (_, i) => ({
+    id: 'm' + i, d: today, t: i + 1, name: 'MEAL_' + i, kcal: 100 + i, protein: 5, carbs: 1, fat: 1,
+    meal: 'snack', grams: 80, source: 'photo-SENTINEL', media: [{ hash: HASH, data: B64 }],
+    vision: VISION, prompt: VISION, note: 'secret plate', edited: true,
+  }));
+  const S = sampleState({
+    nutrition: {
+      heightCm: 180, birthday: '1996-01-15', sex: 'male', activity: 'moderate', goal: 'maintain',
+      likes: ['oats'], dislikes: [], wontEat: ['pork'], note: 'no shellfish',
+    },
+    foodLog: [
+      ...meals,
+      { id: 'old', d: '2020-01-01', t: 1, name: 'ANCIENT_OATS', kcal: 50, protein: 1, carbs: 1, fat: 1, meal: 'breakfast', media: [{ hash: HASH }] },
+    ],
+    bodyweight: [{ d: '2026-10-01', w: 80, t: 1 }],
+  });
+  const opts = { handle: handleFor('u_nutrition') };
+  const create = payload.build(S, { ...opts, kind: 'create' });
+  assert.equal('nutrition' in create, false);
+  const off = payload.build(S, { ...opts, kind: 'review', categories: ['plan', 'training', 'bodyweight', 'profile', 'prefs'] });
+  assert.equal('nutrition' in off, false);
+  const debriefOff = payload.build(S, { ...opts, kind: 'debrief', workoutId: 'w1', categories: ['plan', 'training'] });
+  assert.equal('nutrition' in debriefOff, false);
+  for (const leaked of [create, off, debriefOff]) {
+    const json = JSON.stringify(leaked);
+    for (const secret of [HASH, VISION, B64, 'ANCIENT_OATS', 'MEAL_0', 'photo-SENTINEL', 'secret plate']) {
+      assert.ok(!json.includes(secret), `category-off payload leaked ${secret}`);
+    }
+  }
+
+  const on = payload.build(S, { ...opts, kind: 'review' });
+  const n = on.nutrition;
+  assert.ok(n, 'review includes nutrition when the category is on');
+  const keys = Object.keys(n).sort();
+  assert.deepEqual(keys, ['days', 'dislikes', 'energy', 'inputs', 'likes', 'note', 'targets', 'today', 'window', 'wontEat']);
+  assert.deepEqual(Object.keys(n.targets).sort(), ['carbs', 'fat', 'kcal', 'protein', 'source']);
+  assert.ok(n.targets.source === 'inferred' || n.targets.source === 'custom');
+  assert.deepEqual(Object.keys(n.inputs).sort(), ['activity', 'age', 'goal', 'heightCm', 'sex', 'weightKg']);
+  assert.equal(n.today.length, 12);
+  n.today.forEach(m => assert.deepEqual(Object.keys(m).sort(), ['kcal', 'meal', 'name', 'protein']));
+  n.days.forEach(d => assert.deepEqual(Object.keys(d).sort(), ['carbs', 'd', 'fat', 'kcal', 'meals', 'protein']));
+  assert.ok(!n.days.some(d => d.d === '2020-01-01'));
+  assert.deepEqual(n.likes, ['oats']);
+  assert.equal(n.wontEat[0], 'pork');
+  const json = JSON.stringify(on);
+  for (const secret of [HASH, VISION, B64, 'ANCIENT_OATS', 'photo-SENTINEL', 'secret plate', '"media"', '"grams"', '"vision"', 'base64']) {
+    assert.ok(!json.includes(secret), `review payload leaked ${secret}`);
+  }
+
+  const debrief = payload.build(S, { ...opts, kind: 'debrief', workoutId: 'w1' });
+  assert.ok(debrief.nutrition, 'a debrief includes nutrition');
+  assert.ok(!JSON.stringify(debrief).includes(HASH));
+});
