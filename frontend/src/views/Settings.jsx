@@ -46,6 +46,7 @@ import { Section, Row, SelectRow, Switch, Segmented, Button, TextField, SearchFi
 import { PAGES, ROOT_GROUPS, pageVisible, searchSettings, pageTrail } from './settings-pages.js'
 import NutritionSettings from './NutritionSettings.jsx'
 import { targetExplain } from '../lib/nutrition.js'
+import { exportFoodDiary, foodDiaryCsv, importFudDiary } from '../lib/food-export.js'
 
 /* Settings (v1.3.11). The root is one screen: an account card, eleven rows that each open a page
    (/settings/<page>), and a search over every row. Rare things live one level further down
@@ -101,6 +102,7 @@ export default function Settings({ page = null, find = null, via = null }) {
   const toast = useUI(s => s.toast)
   const fileRef = useRef(null)
   const importRef = useRef(null)
+  const foodRef = useRef(null)
   const body = useRef(null)
   const wakeOK = wakeLockSupported()
 
@@ -339,6 +341,63 @@ export default function Settings({ page = null, find = null, via = null }) {
     confirmSheet({
       title: t('Import backup?'), message: t('This replaces all current data with the backup file.'), confirmText: t('Import'), danger: true,
       onConfirm: () => apply(null)
+    })
+  }
+  // The food diary is its own file, not the whole-profile backup. JSON keeps each meal (media
+  // hashes only, never the photos). CSV is those same days as a spreadsheet. A Fud AI export
+  // (format 1.5) contributes numbers only: its photos are filenames on the other phone, so each
+  // meal is added as manual and the log already here is left in place.
+  const handOut = async (text, name, mime) => {
+    if (MOBILE) {
+      try { await shareExport(text, name); toast(t('Backup exported')) } catch (e) { /* share sheet dismissed */ }
+      return
+    }
+    const blob = new Blob([text], { type: mime })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href)
+    toast(t('Backup exported'))
+  }
+  const openFoodExport = () => {
+    const save = (range, csv) => {
+      const doc = exportFoodDiary(useStore.getState().S.foodLog, { range, today: todayISO() })
+      const name = 'opengym-food-' + doc.from + '_to_' + doc.to + (csv ? '.csv' : '.json')
+      handOut(csv ? foodDiaryCsv(doc) : JSON.stringify(doc, null, 2), name, csv ? 'text/csv' : 'application/json')
+    }
+    const rangeItems = csv => [
+      { label: t('Today'), onClick: () => save('today', csv) },
+      { label: t('7 days'), onClick: () => save('7', csv) },
+      { label: t('30 days'), onClick: () => save('30', csv) },
+      { label: t('All'), onClick: () => save('all', csv) },
+    ]
+    menuSheet({
+      title: t('Export food diary'),
+      subtitle: t('JSON keeps each meal. CSV is the same days as a spreadsheet.'),
+      sections: [
+        { title: t('JSON'), items: rangeItems(false) },
+        { title: t('CSV'), items: rangeItems(true) },
+      ],
+    })
+  }
+  const doImportFood = async ev => {
+    const f = ev.target.files[0]; if (!f) return
+    ev.target.value = ''
+    let text
+    try { text = await f.text() }
+    catch { toast(t('This is not a valid Fud AI food diary JSON file.')); return }
+    const parsed = importFudDiary(text)
+    if (!parsed.ok) { toast(t(parsed.error)); return }
+    const n = parsed.entries.length
+    if (!n) { toast(t('That file has no meals.')); return }
+    confirmSheet({
+      title: t('Import Fud AI diary?'),
+      message: tn('{0} meal will be added. Meals you already logged stay.', '{0} meals will be added. Meals you already logged stay.', n),
+      confirmText: t('Import'),
+      onConfirm: () => {
+        update(s => {
+          if (!Array.isArray(s.foodLog)) s.foodLog = []
+          s.foodLog.push(...parsed.entries)
+        })
+        toast(tn('{0} meal added.', '{0} meals added.', n))
+      },
     })
   }
   // Whether any custom exercise has a photo or video: the rows about them only show then.
@@ -789,6 +848,8 @@ export default function Settings({ page = null, find = null, via = null }) {
       <Section title={t('Back up')}>
         <Row icon="share" iconTint="var(--blue)" title={t('Export backup (JSON)')} subtitle={hasMedia ? t('Without photos and videos') : undefined} accessory="chevron" onClick={doExport} />
         {hasMedia && <Row icon="share" iconTint="var(--blue)" title={t('Export with photos & videos (.zip)')} accessory="chevron" onClick={doExportZip} />}
+        <Row icon="share" iconTint="var(--blue)" title={t('Export food diary')}
+          subtitle={t('JSON or CSV, for today, 7 days, 30 days, or all')} accessory="chevron" onClick={openFoodExport} />
         {/* 14 is AUTO_BACKUP_KEEP in lib/mobile.js, written out because the Settings tests mock
             that module wholesale; mobile.autobackup.test.js pins the two together. */}
         {MOBILE && <Row icon="folder" iconTint="var(--blue)" title={t('Auto-backup on changes')}
@@ -807,6 +868,9 @@ export default function Settings({ page = null, find = null, via = null }) {
         <Row icon="key" iconTint="var(--teal)" title={t('Import from Hevy')}
           subtitle={t('Pull your history with a Hevy Pro API key')}
           accessory="chevron" onClick={importFromHevy} />
+        <Row icon="download" iconTint="var(--teal)" title={t('Import Fud AI diary')}
+          subtitle={t('Adds meals from a Fud AI JSON file. Photos stay on that phone.')}
+          accessory="chevron" onClick={() => foodRef.current.click()} />
       </Section>
       {hasMedia && <Section><MediaRow /></Section>}
       <Section>
@@ -816,6 +880,7 @@ export default function Settings({ page = null, find = null, via = null }) {
       {/* Reset after reading so picking the same file twice still fires onChange. */}
       <input ref={importRef} type="file" accept=".csv,.xml,text/csv,text/xml" style={{ display: 'none' }}
         onChange={ev => { const f = ev.target.files[0]; if (f) importFromApp(f); ev.target.value = '' }} />
+      <input ref={foodRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={doImportFood} />
     </>,
 
     about: () => <>
