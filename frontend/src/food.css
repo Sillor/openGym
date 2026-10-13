@@ -19,7 +19,7 @@
 
 /* ------------------------------------------------------------------ ring -- */
 .fd-ring{position:relative;display:inline-flex;flex:none;align-items:center;justify-content:center}
-.fd-ring svg{position:absolute;inset:0}
+.fd-ring > svg{position:absolute;inset:0}
 .fd-ring-arc{transition:stroke-dashoffset .7s var(--ease),stroke .3s}
 .fd-ring-mid{position:relative;display:flex;align-items:center;justify-content:center;line-height:1}
 .fd-ring-mid .icn{font-size:20px;--icon-stroke:1.9}
