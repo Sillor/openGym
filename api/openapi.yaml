@@ -3009,12 +3009,23 @@ paths:
     post:
       tags: [coach]
       operationId: postNutritionAnalyze
-      summary: Estimate a meal from a photo or a description
+      summary: Estimate a meal from a photo or a description, or correct an earlier estimate
       description: |
         Uses this instance's Coach provider and key. Image bytes are sent to that provider
         and are not stored. CLI providers (Claude, Codex) accept text only; a photo returns
-        `provider` and is not sent. Each profile may call it `NUTRITION_ANALYZE_CAP` times
-        per UTC day (default 50). Over the cap the answer is 429 `cap`.
+        `provider` and is not sent (a correction drops the photo instead). Each profile may
+        call it `NUTRITION_ANALYZE_CAP` times per UTC day (default 50). Over the cap the
+        answer is 429 `cap`.
+
+        With `fix`, the call corrects an earlier estimate: the model sees `fix.previous` (the
+        meal as it is now, grams included) and `fix.note`, and returns the whole meal with
+        only that changed. Both tries together get 150 s; past that the answer is 504
+        `timeout`. An answer the model's token limit cut off is closed at its last complete
+        food. Failures are recorded in the coach job log as outcomes only, never content.
+
+        Grams are the truth wherever they are known; `servingQty`/`servingUnit` is how the
+        amount reads (2 slice, 330 ml, 1 serving), and `units` lists other ways to count the
+        same food as grams per unit.
       requestBody:
         required: true
         content:
@@ -3025,6 +3036,7 @@ paths:
                 text:
                   type: string
                   maxLength: 8000
+                  description: Longer text is refused with 400 `too long`, not cut.
                 images:
                   type: array
                   maxItems: 3
@@ -3034,9 +3046,18 @@ paths:
                     properties:
                       mime: { type: string, enum: [image/jpeg, image/png, image/webp, image/gif] }
                       base64: { type: string, description: Raw base64, not a data URL. }
+                fix:
+                  type: object
+                  required: [previous, note]
+                  properties:
+                    previous:
+                      type: object
+                      description: The meal as shown, in the model schema (name, grams, quantity, unit, calories, protein, carbs, fat, ingredients). At most 16000 characters as JSON.
+                    note: { type: string, maxLength: 2000, description: The correction, in the user's words. }
+                    context: { type: string, maxLength: 8000, description: The original description, when there was one. }
       responses:
         '200':
-          description: Parsed meals. kcal is an integer; protein, carbs, fat, and grams are one decimal.
+          description: Parsed meals. kcal is an integer; protein, carbs and fat are one decimal; grams is one decimal or null when unknown.
           content:
             application/json:
               schema:
@@ -3048,33 +3069,46 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [name, kcal, protein, carbs, fat, grams]
+                      required: [name, kcal, protein, carbs, fat, grams, servingQty, servingUnit]
                       properties:
                         name: { type: string }
                         kcal: { type: integer }
                         protein: { type: number }
                         carbs: { type: number }
                         fat: { type: number }
-                        grams: { type: number }
+                        grams: { type: number, nullable: true }
+                        servingQty: { type: number }
+                        servingUnit: { type: string, example: slice }
+                        units: { $ref: '#/components/schemas/FoodUnits' }
                         ingredients:
                           type: array
+                          maxItems: 20
                           items:
                             type: object
-                            required: [name, kcal, protein, carbs, fat, grams]
+                            required: [name, kcal, protein, carbs, fat, grams, qty, unit]
                             properties:
                               name: { type: string }
                               kcal: { type: integer }
                               protein: { type: number }
                               carbs: { type: number }
                               fat: { type: number }
-                              grams: { type: number }
+                              grams: { type: number, nullable: true }
+                              qty: { type: number }
+                              unit: { type: string, example: g }
+                              units: { $ref: '#/components/schemas/FoodUnits' }
         '400':
-          description: Nothing to analyze, a bad image, or this provider cannot read photos.
+          description: Nothing to analyze, a bad image, text or a correction that is too long (`too long`), or this provider cannot read photos.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-              example: { error: "provider" }
+              example: { error: "too long" }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '413':
+          description: The request body is over 5 MiB.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "body too large" }
         '422':
           description: The model answered, but not with usable nutrition JSON.
           content:
@@ -3099,6 +3133,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: "provider" }
+        '504':
+          description: The provider did not answer within 150 s.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "timeout" }
 
 components:
   securitySchemes:
@@ -3246,6 +3286,16 @@ components:
           example: { error: "that code is wrong, used or expired", code: "link-invalid" }
 
   schemas:
+    FoodUnits:
+      type: array
+      maxItems: 5
+      description: Other ways to count the same food, as grams in one unit. Never plain grams.
+      items:
+        type: object
+        required: [unit, g]
+        properties:
+          unit: { type: string, example: slice }
+          g: { type: number, example: 105 }
     Error:
       type: object
       required: [error]

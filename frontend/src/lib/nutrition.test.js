@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ageYears, cleanMeal, convertServingUnit, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, scaleIngredient, scaleToGrams, scaleToServings, targetExplain, weeklyCalorieNudge, weeklyFromUnit, weeklyInUnit,
+  ageYears, changeUnit, cleanMeal, dayTotals, inferGoal, mealFromTime, nutritionOf, nutritionTargets, profileTargets, resize, setMealTotal, targetExplain, withIngredients, weeklyCalorieNudge, weeklyFromUnit, weeklyInUnit,
 } from './nutrition.js'
 
 // Male, 30, 180 cm, 80 kg, moderate, maintain. Mifflin then the moderate multiplier.
@@ -61,12 +61,15 @@ describe('nutritionTargets', () => {
     expect(t.protein).toBe(Math.trunc(2.2 * 80))
   })
 
-  it('lets a custom number replace only that target', () => {
+  it('lets a custom number replace that target, with carbs filling what the calories leave', () => {
     const t = nutritionTargets({ ...male, customKcal: 2000, customProtein: 160 })
     expect(t.kcal).toBe(2000)
     expect(t.protein).toBe(160)
     expect(t.fat).toBe(48)
-    expect(t.carbs).toBe(415)
+    // trunc((2000 - 160*4 - 48*9) / 4)
+    expect(t.carbs).toBe(232)
+    expect(nutritionTargets({ ...male, customKcal: 2000, customCarbs: 300 }).carbs).toBe(300)
+    expect(nutritionTargets(male).carbs).toBe(415)
     expect(t.formula.kcal).toBe(2607)
   })
 
@@ -201,24 +204,12 @@ describe('day totals, meals, and serving scale', () => {
     expect(mealFromTime(new Date(2026, 9, 10, 22, 0))).toBe('snack')
     expect(mealFromTime(11)).toBe('lunch')
   })
-  it('scales from the gram basis and refuses to invent one', () => {
-    expect(scaleToGrams({ grams: 100, kcal: 200, protein: 10, carbs: 20, fat: 5, name: 'rice' }, 150)).toMatchObject({
-      grams: 150, kcal: 300, protein: 15, carbs: 30, fat: 7.5, name: 'rice',
-    })
-    const bare = { kcal: 200, name: 'rice' }
-    expect(scaleToGrams(bare, 150)).toBe(bare)
-    const lined = {
-      kcal: 200, name: 'rice',
-      ingredients: [{ name: 'rice', kcal: 200, protein: 4, carbs: 40, fat: 1, grams: 100 }],
-    }
-    expect(scaleToGrams(lined, 150)).toBe(lined)
-  })
 })
 
 describe('cleanMeal', () => {
   it('keeps a typed meal and drops a blank name', () => {
     const meal = cleanMeal({ name: '  Oats ', kcal: 300, protein: 12.26, meal: 'breakfast', note: ' honey ' }, { day: '2026-10-10', id: 'm1' })
-    expect(meal).toMatchObject({ id: 'm1', d: '2026-10-10', name: 'Oats', kcal: 300, protein: 12.3, meal: 'breakfast', source: 'manual', note: 'honey', grams: null, edited: false })
+    expect(meal).toMatchObject({ id: 'm1', d: '2026-10-10', name: 'Oats', kcal: 300, protein: 12.3, meal: 'breakfast', source: 'manual', note: 'honey', grams: null, servingQty: 1, servingUnit: 'serving', edited: false })
     expect(cleanMeal({ name: '  ', kcal: 10 }, { day: '2026-10-10' })).toBeNull()
     expect(cleanMeal({ name: 'Oats' }, {})).toBeNull()
   })
@@ -226,106 +217,125 @@ describe('cleanMeal', () => {
     const media = [{ hash: 'a' }, { hash: 'b' }, { hash: 'c' }, { hash: 'd' }]
     expect(cleanMeal({ name: 'Plate', media, source: 'photo' }, { day: '2026-10-10' }).media).toHaveLength(3)
   })
-  it('sums kept ingredients and drops junk rows', () => {
+  it('sums ingredients, keeps a line with an emptied number, and drops a nameless one', () => {
     const rows = [
-      { name: '  oats ', kcal: 150.4, protein: 5, carbs: 27, fat: 3, grams: 40 },
+      { name: '  oats ', kcal: 150.4, protein: 5, carbs: 27, fat: 3, grams: 40, qty: 40, unit: 'g', units: [] },
       { name: '', kcal: 50, protein: 1, carbs: 1, fat: 1, grams: 10 },
-      { name: 'salt', kcal: -5, protein: 0, carbs: 0, fat: 0, grams: 1 },
+      { name: 'milk', kcal: 80, protein: null, carbs: '', fat: 4, grams: 100, qty: 100, unit: 'ml', units: [{ unit: 'ml', g: 1 }] },
       null,
-      { name: 'milk', kcal: 80, protein: 4, carbs: 6, fat: 4, grams: 100 },
     ]
-    const meal = cleanMeal({ name: 'Bowl', kcal: 999, protein: 1, carbs: 1, fat: 1, grams: 140, ingredients: rows }, { day: '2026-10-10' })
+    const meal = cleanMeal({ name: 'Bowl', kcal: 999, protein: 1, carbs: 1, fat: 1, grams: 300, ingredients: rows }, { day: '2026-10-10' })
     expect(meal.ingredients).toEqual([
-      { name: 'oats', kcal: 150, protein: 5, carbs: 27, fat: 3, grams: 40, qty: 1, unit: 'serving' },
-      { name: 'milk', kcal: 80, protein: 4, carbs: 6, fat: 4, grams: 100, qty: 1, unit: 'serving' },
+      { name: 'oats', kcal: 150, protein: 5, carbs: 27, fat: 3, grams: 40, qty: 40, unit: 'g', units: [] },
+      { name: 'milk', kcal: 80, protein: 0, carbs: 0, fat: 4, grams: 100, qty: 100, unit: 'ml', units: [{ unit: 'ml', g: 1 }] },
     ])
-    expect(meal).toMatchObject({ kcal: 230, protein: 9, carbs: 33, fat: 7, grams: 140 })
+    // Every line is weighed, so the meal weighs what they weigh.
+    expect(meal).toMatchObject({ kcal: 230, protein: 5, carbs: 27, fat: 7, grams: 140 })
     const many = Array.from({ length: 21 }, (_, i) => ({ name: `bit ${i}`, kcal: 10, protein: 1, carbs: 1, fat: 0, grams: 5 }))
     const capped = cleanMeal({ name: 'Plate', kcal: 1, ingredients: many }, { day: '2026-10-10' })
     expect(capped.ingredients).toHaveLength(20)
     expect(capped.kcal).toBe(200)
   })
-  it('leaves a meal with no usable ingredients on its own numbers', () => {
-    const meal = cleanMeal({ name: 'Oats', kcal: 300, protein: 12, carbs: 40, fat: 6, ingredients: [{ name: 'nope' }] }, { day: '2026-10-10' })
-    expect(meal).toMatchObject({ kcal: 300, protein: 12, carbs: 40, fat: 6, grams: null })
-    expect(meal.ingredients).toBeUndefined()
+  it('keeps a line with no weight as a count', () => {
+    const meal = cleanMeal({ name: 'Plate', grams: 300, ingredients: [
+      { name: 'rice', kcal: 200, grams: 150, qty: 150, unit: 'g', units: [] },
+      { name: 'sauce', kcal: 60, qty: 2, unit: 'tbsp' },
+    ] }, { day: '2026-10-10' })
+    expect(meal.ingredients[1]).toMatchObject({ grams: null, qty: 2, unit: 'tbsp' })
+    expect(meal).toMatchObject({ kcal: 260, grams: 300 })
   })
-  it('scales ingredient lines with the meal, then one line on its own', () => {
+  it('reads an entry saved before units existed', () => {
     const meal = cleanMeal({
-      name: 'Plate', grams: 200, kcal: 1,
+      name: 'Plate', grams: 250, servingQty: 1, servingUnit: 'serving', kcal: 1,
       ingredients: [
-        { name: 'rice', kcal: 200, protein: 4, carbs: 44, fat: 0.4, grams: 150 },
-        { name: 'chicken', kcal: 100, protein: 20, carbs: 0, fat: 2, grams: 50 },
+        { name: 'chicken', kcal: 200, protein: 25, carbs: 0, fat: 8, grams: 150, qty: 1, unit: 'serving' },
+        { name: 'juice', kcal: 100, protein: 1, carbs: 24, fat: 0, grams: 240, qty: 2, unit: 'cup' },
       ],
     }, { day: '2026-10-10' })
-    const half = scaleToGrams(meal, 100)
-    expect(half.grams).toBe(100)
-    expect(half.ingredients).toEqual([
-      { name: 'rice', kcal: 100, protein: 2, carbs: 22, fat: 0.2, grams: 75, qty: 1, unit: 'serving' },
-      { name: 'chicken', kcal: 50, protein: 10, carbs: 0, fat: 1, grams: 25, qty: 1, unit: 'serving' },
-    ])
-    expect(half).toMatchObject({ kcal: 150, protein: 12, carbs: 22, fat: 1.2 })
-    const rice = scaleIngredient(meal, 0, 75)
-    expect(rice.grams).toBe(200)
-    expect(rice.ingredients[0]).toMatchObject({ name: 'rice', grams: 75, kcal: 100, protein: 2, carbs: 22, fat: 0.2 })
-    expect(rice.ingredients[1]).toEqual(meal.ingredients[1])
-    expect(rice).toMatchObject({ kcal: 200, protein: 22, carbs: 22, fat: 2.2 })
-    const noBasis = { ...meal, ingredients: [{ name: 'salt', kcal: 0, protein: 0, carbs: 0, fat: 0 }] }
-    expect(scaleIngredient(noBasis, 0, 5)).toBe(noBasis)
-    expect(scaleIngredient(meal, 3, 10)).toBe(meal)
+    expect(meal.ingredients[0]).toMatchObject({ qty: 150, unit: 'g', grams: 150 })
+    expect(meal.ingredients[1]).toMatchObject({ qty: 2, unit: 'cup', units: [{ unit: 'cup', g: 120 }] })
+    // The bowl grew to hold what the lines weigh; it is still one serving.
+    expect(meal).toMatchObject({ grams: 390, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 390 }] })
+    expect(cleanMeal(meal, { day: '2026-10-10' })).toEqual(meal)
   })
-  it('keeps the serving and each ingredient amount', () => {
-    const meal = cleanMeal({
-      name: 'Juice', servingQty: 2, servingUnit: 'cup', kcal: 1,
-      ingredients: [{ name: 'juice', kcal: 80, protein: 1, carbs: 18, fat: 0, grams: 240, qty: 2, unit: 'cup' }],
-    }, { day: '2026-10-10' })
-    expect(meal.servingQty).toBe(2)
-    expect(meal.servingUnit).toBe('cup')
-    expect(meal.ingredients[0]).toMatchObject({ qty: 2, unit: 'cup', kcal: 80 })
-    const junk = cleanMeal({
-      name: 'Snack', servingQty: 0, servingUnit: 'bowl', kcal: 100,
-      ingredients: [{ name: 'bar', kcal: 100, protein: 2, carbs: 12, fat: 4, grams: 40, unit: 'handful' }],
-    }, { day: '2026-10-10' })
-    expect(junk.servingQty).toBe(1)
-    expect(junk.servingUnit).toBe('serving')
-    expect(junk.ingredients[0]).toMatchObject({ qty: 1, unit: 'serving' })
+  it('re-reads the count from the weight, and junk amounts become one serving', () => {
+    const pizza = cleanMeal({ name: 'Pizza', kcal: 600, grams: 300, servingQty: 9, servingUnit: 'slices', units: [{ unit: 'slice', g: 100 }] }, { day: '2026-10-10' })
+    expect(pizza).toMatchObject({ servingQty: 3, servingUnit: 'slice' })
+    const weighed = cleanMeal({ name: 'Rice', kcal: 260, servingQty: 200, servingUnit: 'g' }, { day: '2026-10-10' })
+    expect(weighed).toMatchObject({ grams: 200, servingQty: 200, servingUnit: 'g' })
+    const junk = cleanMeal({ name: 'Snack', servingQty: 0, servingUnit: '!!', kcal: 100 }, { day: '2026-10-10' })
+    expect(junk).toMatchObject({ servingQty: 1, servingUnit: 'serving', grams: null })
   })
 })
 
-describe('serving scale and liquid units', () => {
-  const soup = () => cleanMeal({
-    name: 'Soup', kcal: 1, grams: 240, servingQty: 1, servingUnit: 'cup',
+describe('resize and changeUnit', () => {
+  const plate = () => cleanMeal({
+    name: 'Plate', servingQty: 1, servingUnit: 'bowl', units: [{ unit: 'bowl', g: 200 }], kcal: 1,
     ingredients: [
-      { name: 'broth', kcal: 40, protein: 2, carbs: 4, fat: 1, grams: 240, qty: 1, unit: 'cup' },
-      { name: 'bread', kcal: 60, protein: 3, carbs: 6, fat: 1, grams: 30, qty: 1, unit: 'piece' },
+      { name: 'rice', kcal: 200, protein: 4, carbs: 44, fat: 0.4, grams: 150, qty: 0.75, unit: 'cup', units: [{ unit: 'cup', g: 200 }] },
+      { name: 'chicken', kcal: 100, protein: 20, carbs: 0, fat: 2, grams: 50, qty: 50, unit: 'g', units: [] },
     ],
   }, { day: '2026-10-10' })
 
-  it('doubles calories and ingredient calories when the serving count goes from 1 to 2', () => {
-    const meal = soup()
-    const doubled = scaleToServings(meal, 2)
-    expect(doubled.kcal).toBe(200)
-    expect(doubled.servingQty).toBe(2)
-    expect(doubled.servingUnit).toBe('cup')
-    expect(doubled.ingredients[0]).toMatchObject({ kcal: 80, qty: 2, unit: 'cup', grams: 480 })
-    expect(doubled.ingredients[1]).toMatchObject({ kcal: 120, qty: 2, unit: 'piece' })
-    const bare = { kcal: 100, name: 'rice' }
-    expect(scaleToServings(bare, 2)).toBe(bare)
-    expect(scaleToServings({ ...meal, servingQty: 0 }, 2)).toEqual({ ...meal, servingQty: 0 })
+  it('scales a meal and each line from the new count, in their own units', () => {
+    const two = resize(plate(), 2, 'bowl')
+    expect(two).toMatchObject({ servingQty: 2, servingUnit: 'bowl', grams: 400, kcal: 600, protein: 48 })
+    expect(two.ingredients[0]).toMatchObject({ grams: 300, qty: 1.5, unit: 'cup', kcal: 400 })
+    expect(two.ingredients[1]).toMatchObject({ grams: 100, qty: 100, unit: 'g', kcal: 200 })
   })
+  it('scales from grams typed in another unit', () => {
+    const g = resize(plate(), 100, 'g')
+    expect(g).toMatchObject({ servingQty: 100, servingUnit: 'g', grams: 100, kcal: 150 })
+  })
+  it('never compounds when typing through 1, 15, 150', () => {
+    const base = plate().ingredients[1]
+    const steps = [1, 15, 150].map(n => resize(base, n, 'g'))
+    expect(steps[2]).toMatchObject({ grams: 150, qty: 150, kcal: 300, protein: 60 })
+  })
+  it('scales a count with no weight by the count', () => {
+    const bar = { name: 'bar', kcal: 200, protein: 10, carbs: 20, fat: 8, grams: null, qty: 1, unit: 'piece', units: [] }
+    expect(resize(bar, 1.5, 'piece')).toMatchObject({ kcal: 300, qty: 1.5, grams: null })
+    expect(resize(bar, 1.5, 'g')).toBe(bar)
+    expect(resize(bar, 0, 'piece')).toBe(bar)
+  })
+  it('switches unit without touching calories', () => {
+    const rice = plate().ingredients[0]
+    const g = changeUnit(rice, 'g')
+    expect(g).toMatchObject({ qty: 150, unit: 'g', kcal: 200, grams: 150 })
+    expect(changeUnit(g, 'cup')).toMatchObject({ qty: 0.75, unit: 'cup', kcal: 200 })
+    const juice = { name: 'juice', kcal: 100, grams: 250, qty: 250, unit: 'ml', units: [{ unit: 'ml', g: 1.04 }] }
+    expect(changeUnit(juice, 'cup').qty).toBeCloseTo(250 / (1.04 * 240), 3)
+    const bar = { name: 'bar', kcal: 200, grams: null, qty: 1, unit: 'piece', units: [] }
+    expect(changeUnit(bar, 'g')).toBe(bar)
+  })
+})
 
-  it('turns 1 cup into 240 ml and leaves calories unchanged', () => {
-    const meal = soup()
-    const ml = convertServingUnit(meal, 'ml')
-    expect(ml.servingQty).toBe(240)
-    expect(ml.servingUnit).toBe('ml')
-    expect(ml.kcal).toBe(meal.kcal)
-    expect(ml.protein).toBe(meal.protein)
-    expect(ml.ingredients[0]).toMatchObject({ qty: 240, unit: 'ml', kcal: 40 })
-    expect(ml.ingredients[1]).toMatchObject({ qty: 1, unit: 'piece', kcal: 60 })
-    expect(convertServingUnit(meal, 'g')).toBe(meal)
-    expect(convertServingUnit(meal, 'piece')).toBe(meal)
-    expect(convertServingUnit({ ...meal, servingUnit: 'slice' }, 'cup')).toEqual({ ...meal, servingUnit: 'slice' })
+describe('withIngredients and setMealTotal', () => {
+  const meal = () => cleanMeal({
+    name: 'Bowl', servingQty: 1, servingUnit: 'bowl', units: [{ unit: 'bowl', g: 250 }], kcal: 1,
+    ingredients: [
+      { name: 'rice', kcal: 200, protein: 4, carbs: 40, fat: 1, grams: 150, qty: 150, unit: 'g', units: [] },
+      { name: 'beans', kcal: 100, protein: 6, carbs: 18, fat: 0, grams: 100, qty: 100, unit: 'g', units: [] },
+    ],
+  }, { day: '2026-10-10' })
+
+  it('keeps the meal one bowl when a line grows, and follows its weight', () => {
+    const m = meal()
+    const more = withIngredients(m, [resize(m.ingredients[0], 300, 'g'), m.ingredients[1]])
+    expect(more).toMatchObject({ kcal: 500, grams: 400, servingQty: 1, servingUnit: 'bowl', units: [{ unit: 'bowl', g: 400 }] })
+    const gramsShown = withIngredients(changeUnit(m, 'g'), [m.ingredients[1]])
+    expect(gramsShown).toMatchObject({ grams: 100, servingQty: 100, servingUnit: 'g', kcal: 100 })
+    expect(withIngredients(m, []).ingredients).toEqual([])
+  })
+  it('spreads a typed total over the lines', () => {
+    const m = setMealTotal(meal(), 'kcal', 600)
+    expect(m.ingredients.map(r => r.kcal)).toEqual([400, 200])
+    expect(m.kcal).toBe(600)
+    const fat = setMealTotal(meal(), 'fat', 10)
+    expect(fat.ingredients.map(r => r.fat)).toEqual([10, 0])
+    const sugarless = { ...meal(), ingredients: meal().ingredients.map(r => ({ ...r, protein: 0 })) }
+    expect(setMealTotal(sugarless, 'protein', 25).ingredients.map(r => r.protein)).toEqual([15, 10])
+    expect(setMealTotal({ name: 'x', kcal: 5 }, 'kcal', 99.6)).toEqual({ name: 'x', kcal: 100 })
   })
 })
 

@@ -114,7 +114,8 @@ test('length retry doubles, caps at 16384, and does not mutate the original body
     maxTokens: 1000
   });
   const again = retryFoodBody(small);
-  assert.equal(again.max_completion_tokens, 2000);
+  // Doubling 1000 would leave a cut-off answer cut off again; the retry has at least 8192.
+  assert.equal(again.max_completion_tokens, 8192);
   assert.match(again.messages[0].content.find(p => p.type === 'text').text, /compact JSON/);
   assert.equal(again.messages[0].content.find(p => p.type === 'image_url').image_url.url, 'data:image/png;base64,xx');
   assert.equal(small.messages[0].content.find(p => p.type === 'text').text, 'meal');
@@ -146,11 +147,12 @@ test('at most three images, and the gemini and anthropic parts carry the same by
 
 test('prompts ask for the diary schema', () => {
   for (const prompt of [imageFoodPrompt('extra cheese'), textFoodPrompt('two eggs')]) {
-    assert.match(prompt, /Respond ONLY with JSON/);
+    assert.match(prompt, /Respond ONLY with compact JSON/);
     assert.match(prompt, /serving_size_grams/);
     assert.match(prompt, /"ingredients":\[\]/);
     assert.equal(prompt.includes('vitamin_a'), false);
-    assert.equal(prompt.includes('unit_options'), false);
+    assert.match(prompt, /unit_options/);
+    assert.match(prompt, /never invent/);
     assert.equal(prompt.includes('You are the openGym Coach'), false);
   }
   assert.match(imageFoodPrompt('extra cheese'), /extra cheese/);
@@ -168,7 +170,7 @@ test('the browser parser stays in lockstep with the API parser', () => {
   const text = '```json\n{"name":"Egg","calories":70.6,"protein":6.24,"carbs":0.5,"fat":5,"serving_size_grams":50}\n```';
   assert.deepEqual(parseFoodAnalysis(text), {
     ok: true,
-    items: [{ name: 'Egg', kcal: 71, protein: 6.2, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving' }]
+    items: [{ name: 'Egg', kcal: 71, protein: 6.2, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 50 }] }]
   });
   assert.deepEqual(parseFoodAnalysis('nope'), { ok: false });
 });
@@ -188,12 +190,13 @@ test('analyze uses the coach key, retries a short answer once, and does not stor
     fetchImpl: seen
   });
   assert.equal(out.status, 200);
-  assert.deepEqual(out.body, { ok: true, items: [{ name: 'Egg', kcal: 70, protein: 6, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving' }] });
+  assert.deepEqual(out.body, { ok: true, items: [{ name: 'Egg', kcal: 70, protein: 6, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 50 }] }] });
   const sent = seen.calls[0];
   assert.equal(sent.url, 'https://api.openai.com/v1/chat/completions');
   assert.equal(sent.headers.authorization, 'Bearer sk-test');
   assert.equal(sent.body.model, 'gpt-4o');
-  assert.equal(sent.body.max_completion_tokens, 1024);
+  // The admin's 1024 is too small for a plate of ingredients; a food read gets at least 4096.
+  assert.equal(sent.body.max_completion_tokens, 4096);
   assert.equal('reasoning_effort' in sent.body, false);
   assert.equal('temperature' in sent.body, false);
   assert.equal(JSON.stringify(sent.body).includes('You are the openGym Coach'), false);
@@ -244,4 +247,86 @@ test('analyze uses the coach key, retries a short answer once, and does not stor
   assert.deepEqual(Object.keys(saved.cap).sort(), ['count', 'date']);
   assert.equal(takeNutritionSlot('other'), true);
   delete process.env.NUTRITION_ANALYZE_CAP;
+});
+
+test('a correction sends the previous answer and the note, and keeps the photo for reference', async () => {
+  resetNutritionSlots();
+  enable('openai', 'gpt-4o');
+  const previous = { name: 'Rice bowl', grams: 300, quantity: 1, unit: 'bowl', calories: 400, protein: 10, carbs: 80, fat: 3,
+    ingredients: [{ name: 'rice', grams: 100, quantity: 100, unit: 'g', calories: 130, protein: 3, carbs: 28, fat: 0.3 }] };
+  const seen = fakeFetch([openaiAnswer({ ...EGG, name: 'Rice bowl' })]);
+  const out = await analyzeNutrition({
+    uid: 'fix',
+    body: { fix: { previous, note: 'the rice was 200 g, not 100', context: 'rice and beans' }, images: [{ mime: 'image/jpeg', base64: PHOTO }] },
+    fetchImpl: seen
+  });
+  assert.equal(out.status, 200);
+  const prompt = seen.calls[0].body.messages[0].content[0].text;
+  assert.match(prompt, /previous answer, as JSON/);
+  assert.ok(prompt.includes('"grams":100'));
+  assert.match(prompt, /correction: the rice was 200 g, not 100/);
+  assert.match(prompt, /original description: rice and beans/);
+  assert.match(prompt, /Change only what it affects/);
+  assert.equal(prompt.includes('Analyze these food images'), false);
+  assert.equal(seen.calls[0].body.messages[0].content[1].image_url.url, 'data:image/jpeg;base64,' + PHOTO);
+
+  const boom = async () => { throw new Error('provider was called'); };
+  assert.deepEqual(await analyzeNutrition({ uid: 'fix', body: { fix: { previous, note: '  ' } }, fetchImpl: boom }), { status: 400, body: { error: 'bad request' } });
+  assert.deepEqual(await analyzeNutrition({ uid: 'fix', body: { fix: { previous: [], note: 'x' } }, fetchImpl: boom }), { status: 400, body: { error: 'bad request' } });
+  assert.deepEqual(await analyzeNutrition({ uid: 'fix', body: { fix: { previous, note: 'x'.repeat(2001) } }, fetchImpl: boom }), { status: 400, body: { error: 'too long' } });
+});
+
+test('a long description is refused in words, not cut silently', async () => {
+  enable('openai', 'gpt-4o');
+  const boom = async () => { throw new Error('provider was called'); };
+  assert.deepEqual(await analyzeNutrition({ uid: 'u', body: { text: 'rice '.repeat(2000) }, fetchImpl: boom }), { status: 400, body: { error: 'too long' } });
+});
+
+test('an answer cut off twice is closed at its last complete food', async () => {
+  resetNutritionSlots();
+  enable('openai', 'gpt-4o');
+  const full = JSON.stringify({ name: 'Plate', calories: 500, ingredients: [
+    { name: 'Chicken', grams: 150, calories: 250, protein: 25, carbs: 0, fat: 8 },
+    { name: 'Rice', grams: 200, calories: 250, protein: 5, carbs: 50, fat: 7 },
+    { name: 'Salad', grams: 50, calories: 20 }
+  ] });
+  const cut = full.slice(0, full.indexOf('Salad'));
+  const short = { status: 200, body: { choices: [{ message: { content: cut.slice(0, 40) }, finish_reason: 'length' }] } };
+  const longer = { status: 200, body: { choices: [{ message: { content: cut }, finish_reason: 'length' }] } };
+  const seen = fakeFetch([short, longer]);
+  const out = await analyzeNutrition({ uid: 'cut', body: { text: 'chicken rice salad' }, fetchImpl: seen });
+  assert.equal(out.status, 200);
+  assert.deepEqual(out.body.items[0].ingredients.map(r => r.name), ['Chicken', 'Rice']);
+  assert.equal(seen.calls[0].body.max_completion_tokens, 4096);
+  assert.equal(seen.calls[1].body.max_completion_tokens, 8192);
+});
+
+test('a refused retry falls back to the first partial answer, and a provider error is logged without content', async () => {
+  resetNutritionSlots();
+  enable('openai', 'gpt-4o');
+  const full = JSON.stringify({ name: 'Plate', calories: 300, ingredients: [{ name: 'Toast', grams: 60, calories: 160 }, { name: 'Egg', grams: 50, calories: 70 }, { name: 'Jam' }] });
+  const partial = { status: 200, body: { choices: [{ message: { content: full.slice(0, full.indexOf('Jam')) }, finish_reason: 'length' }] } };
+  const refused = { status: 400, body: { error: { message: 'max_tokens is too large: "secret meal words"' } } };
+  const out = await analyzeNutrition({ uid: 'r', body: { text: 'toast egg jam' }, fetchImpl: fakeFetch([partial, refused]) });
+  assert.equal(out.status, 200);
+  assert.deepEqual(out.body.items[0].ingredients.map(r => r.name), ['Toast', 'Egg']);
+
+  const failed = await analyzeNutrition({ uid: 'r', body: { text: 'secret meal words' }, fetchImpl: fakeFetch([refused]) });
+  assert.deepEqual(failed, { status: 502, body: { error: 'provider' } });
+  const last = cfg.load().log.at(-1);
+  assert.equal(last.kind, 'food');
+  assert.equal(last.outcome, 'failed');
+  assert.match(last.detail, /HTTP 400: max_tokens is too large/);
+  assert.equal(JSON.stringify(cfg.load().log).includes('secret meal words'), false);
+});
+
+test('a provider that never answers runs into the deadline', async () => {
+  resetNutritionSlots();
+  enable('openai', 'gpt-4o');
+  const hang = (url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+  });
+  const out = await analyzeNutrition({ uid: 'slow', body: { text: 'egg' }, fetchImpl: hang, deadlineMs: 20 });
+  assert.deepEqual(out, { status: 504, body: { error: 'timeout' } });
+  assert.equal(cfg.load().log.at(-1).errorClass, 'timeout');
 });

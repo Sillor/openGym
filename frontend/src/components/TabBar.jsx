@@ -46,7 +46,7 @@ export default function TabBar({ onStart }) {
   const cur = loc.pathname.split('/')[1] || 'home'
   // The library's pages light up whichever tab holds the library: its own, or Plan's.
   const lib = coach ? 'plan' : 'library'
-  const on = k => cur === k || (cur === 'history' && k === 'stats') || (cur === 'settings' && k === 'home') || ((cur === 'library' || cur === 'muscles') && k === lib) || (cur === 'structural-balance' && k === 'stats')
+  const on = k => cur === k || (cur === 'history' && k === 'stats') || (cur === 'settings' && k === 'home') || ((cur === 'library' || cur === 'muscles') && k === lib) || (cur === 'structural-balance' && k === 'stats') || (cur === 'nutrition' && k === 'food')
 
   const running = !!S.active && cur !== 'workout' && !S.active.editingWorkoutId && !S.active.backfill && S.active.start > 0
   const startWorkout = () => {
@@ -75,6 +75,7 @@ export default function TabBar({ onStart }) {
         {running ? <span className="tab-time"><Elapsed start={S.active.start} /></span>
           : <span>{S.active ? (cur === 'workout' ? t('Workout') : S.active.editingWorkoutId ? t('Edit workout') : t('Resume')) : t('Start')}</span>}
       </button>
+      <Tab active={on('food')} icon="fork" label={t('Food')} onClick={() => nav('/food')} />
       <Tab active={on('stats')} icon="chart" label={t('Stats')} onClick={() => nav('/stats')} />
       {coach
         ? <Tab active={on('coach')} icon="sparkles" label={t('Coach')} onClick={() => nav('/coach')} />

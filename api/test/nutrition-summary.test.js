@@ -32,7 +32,7 @@ test('male 30, 180cm, 80kg, moderate, maintain → 2607 kcal, protein 128, fat 4
   assert.equal(n.energy, undefined);
 });
 
-test('a custom calorie target is reported as custom and leaves the other macros on the formula', () => {
+test('a custom calorie target is reported as custom, with carbs filling what it leaves', () => {
   const S = male();
   S.nutrition.customKcal = 2200;
   const n = nutritionSummary(S, '2026-10-01', TODAY, TODAY);
@@ -40,7 +40,8 @@ test('a custom calorie target is reported as custom and leaves the other macros 
   assert.equal(n.targets.kcal, 2200);
   assert.equal(n.targets.protein, 128);
   assert.equal(n.targets.fat, 48);
-  assert.equal(n.targets.carbs, 415);
+  // trunc((2200 - 128*4 - 48*9) / 4)
+  assert.equal(n.targets.carbs, 314);
 });
 
 test('the window is 28 days, photos never leave, and meals outside it are dropped', () => {

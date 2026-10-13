@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { lookupFoodBarcode, normalizeBarcode } from './open-food-facts.js'
 
-const URL_3017620422003 = 'https://world.openfoodfacts.org/api/v2/product/3017620422003.json?fields=product_name,brands,nutriments,serving_size,serving_quantity'
+const URL_3017620422003 = 'https://world.openfoodfacts.org/api/v2/product/3017620422003.json?fields=product_name,brands,nutriments,serving_size,serving_quantity,serving_quantity_unit'
 
 function okJson(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
@@ -63,14 +63,13 @@ describe('lookupFoodBarcode', () => {
     })
     expect(serving).toEqual({
       ok: true,
-      item: { name: 'Ferrero Nutella', kcal: 81, protein: 0.9, carbs: 8.6, fat: 4.6, grams: 15 },
+      item: { name: 'Ferrero Nutella', kcal: 81, protein: 0.9, carbs: 8.6, fat: 4.6, grams: 15, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 15 }] },
     })
-    expect(Object.keys(serving.item).sort()).toEqual(['carbs', 'fat', 'grams', 'kcal', 'name', 'protein'])
 
     const scaled = await lookupFoodBarcode('3017620422003', { fetchImpl })
     expect(scaled).toEqual({
       ok: true,
-      item: { name: 'Mill Oats', kcal: 100, protein: 5, carbs: 15, fat: 2, grams: 50 },
+      item: { name: 'Mill Oats', kcal: 100, protein: 5, carbs: 15, fat: 2, grams: 50, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 50 }] },
     })
   })
 
@@ -96,7 +95,20 @@ describe('lookupFoodBarcode', () => {
     const out = await lookupFoodBarcode('00412345678903', { fetchImpl })
     expect(out).toEqual({
       ok: true,
-      item: { name: 'Dairy Whole milk', kcal: 64, protein: 3.2, carbs: 4.8, fat: 3.6, grams: 100 },
+      item: { name: 'Dairy Whole milk', kcal: 64, protein: 3.2, carbs: 4.8, fat: 3.6, grams: 100, servingQty: 100, servingUnit: 'g', units: [] },
+    })
+  })
+
+  it('counts a drink in ml', async () => {
+    const fetchImpl = vi.fn(async () => okJson({
+      status: 1,
+      product: {
+        product_name: 'Cola', serving_size: '330 ml', serving_quantity: 330, serving_quantity_unit: 'ml',
+        nutriments: { 'energy-kcal_100g': 42, proteins_100g: 0, carbohydrates_100g: 10.6, fat_100g: 0 },
+      },
+    }))
+    expect((await lookupFoodBarcode('5449000000996', { fetchImpl })).item).toMatchObject({
+      kcal: 139, grams: 330, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 330 }, { unit: 'ml', g: 1 }],
     })
   })
 
@@ -116,7 +128,7 @@ describe('lookupFoodBarcode', () => {
     }))
     expect(await lookupFoodBarcode('4006381333931', { fetchImpl })).toEqual({
       ok: true,
-      item: { name: 'Yogurt', kcal: 100, protein: 4, carbs: 8, fat: 2, grams: 40 },
+      item: { name: 'Yogurt', kcal: 100, protein: 4, carbs: 8, fat: 2, grams: 40, servingQty: 1, servingUnit: 'serving', units: [{ unit: 'serving', g: 40 }] },
     })
   })
 

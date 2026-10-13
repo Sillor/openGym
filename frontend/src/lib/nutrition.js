@@ -7,6 +7,8 @@
 // ported. Nothing here talks to a model or a screen; the diary and the coach both call it.
 
 import { LB_TO_KG } from './recovery.js'
+import { MASS_G } from './food-json.js'
+import { amountOf, cleanUnits, gramsPer, isCount, isMass, normalizeUnit } from './food-units.js'
 
 export const KCAL_PER_KG = 7700
 
@@ -203,7 +205,10 @@ export function nutritionTargets({
   const kcal = customKcal == null ? formulaKcal : trunc(customKcal)
   const protein = customProtein == null ? formulaProtein : trunc(customProtein)
   const fat = customFat == null ? formulaFat : trunc(customFat)
-  const carbs = customCarbs == null ? formulaCarbs : trunc(customCarbs)
+  // Carbs fill whatever the calorie target leaves, so a custom target still adds up.
+  const carbs = customCarbs != null ? trunc(customCarbs)
+    : customKcal == null && customProtein == null && customFat == null ? formulaCarbs
+      : Math.max(0, trunc((kcal - protein * 4 - fat * 9) / 4))
   return {
     kcal, protein, carbs, fat, bmr, tdee, adjustment, method, sexAssumed,
     goal: g, activity: ACTIVITIES[activity] ? activity : 'moderate', weeklyKg: rate,
@@ -411,56 +416,68 @@ export function dayTotals(log, day) {
 }
 
 const MEAL_SOURCES = ['photo', 'text', 'barcode', 'manual']
-const SERVING_UNITS = new Set(['g', 'ml', 'cup', 'tbsp', 'piece', 'slice', 'serving'])
-const ML_PER_UNIT = { ml: 1, tbsp: 15, cup: 240 }
-
-function cleanServingUnit(v) {
-  const s = String(v ?? '').trim().toLowerCase()
-  return SERVING_UNITS.has(s) ? s : 'serving'
-}
-
-function cleanServingQty(v) {
-  if (v == null || v === '') return 1
-  const n = Number(v)
-  if (!Number.isFinite(n) || !(n > 0)) return 1
-  return n
-}
-
-function liquidUnit(v) {
-  const s = String(v ?? '').trim().toLowerCase()
-  return Object.prototype.hasOwnProperty.call(ML_PER_UNIT, s) ? s : null
-}
+const GRAMS_MAX = 10000
+const round3 = n => Math.round(n * 1000) / 1000
 
 function mealNum(v, max, dec) {
   const n = Number(v)
-  if (!Number.isFinite(n) || n < 0) return dec ? 0 : 0
-  const c = Math.min(n, max)
-  return dec ? Math.round(c * 10) / 10 : Math.round(c)
-}
-
-/** A usable ingredient number, or null when the field is empty, negative, or not a number. */
-function ingredientNum(v, max, dec) {
-  if (v == null || v === '') return null
-  const n = Number(v)
-  if (!Number.isFinite(n) || n < 0) return null
+  if (!Number.isFinite(n) || n < 0) return 0
   const c = Math.min(n, max)
   return dec ? round1(c) : Math.round(c)
+}
+
+/**
+ * The amount made consistent. Grams win: the count is re-read from them in the picked unit.
+ * A weighed amount with no gram field ("150 g") gives its grams. With no weight at all the
+ * amount is a count, and nothing invents grams for it.
+ *
+ * Entries saved before units existed have no `units` list. Their ingredients were all stored
+ * as "1 serving" next to a real weight, so those read as grams; any other unit they carried
+ * becomes a unit of grams ÷ count.
+ */
+function cleanAmount(raw, meal) {
+  const legacy = raw?.units === undefined
+  let grams = Number(raw?.grams) > 0 ? Math.min(Number(raw.grams), GRAMS_MAX) : null
+  let unit = normalizeUnit(meal ? raw?.servingUnit : raw?.unit)
+  let qty = Number(meal ? raw?.servingQty : raw?.qty)
+  qty = Number.isFinite(qty) && qty > 0 ? qty : null
+  let units = cleanUnits(raw?.units)
+  if (!grams && unit && qty && isMass(unit)) grams = Math.min(qty * MASS_G[unit], GRAMS_MAX)
+  if (!grams) return { grams: null, qty: round3(qty || 1), unit: unit && !isMass(unit) ? unit : 'serving', units }
+  if (legacy && unit && unit !== 'g' && !isMass(unit)) {
+    if (!meal && unit === 'serving') unit = 'g'
+    else units = cleanUnits([{ unit, g: grams / (qty || 1) }, ...units])
+  }
+  if (!unit) unit = units[0]?.unit || (meal ? 'serving' : 'g')
+  let per = gramsPer(itemOf(meal, grams, unit, qty, units), unit)
+  if (!(per > 0)) {
+    // A count with no size yet: this amount defines it.
+    units = cleanUnits([{ unit, g: grams / (qty || 1) }, ...units])
+    per = grams / (qty || 1)
+  }
+  return { grams: round1(grams), qty: round3(grams / per), unit, units }
+}
+
+function itemOf(meal, grams, unit, qty, units) {
+  return meal ? { grams, servingUnit: unit, servingQty: qty, units } : { grams, unit, qty, units }
 }
 
 function cleanIngredient(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const name = String(raw.name ?? '').trim().slice(0, 120)
   if (!name) return null
-  const kcal = ingredientNum(raw.kcal, 20000, false)
-  const protein = ingredientNum(raw.protein, 2000, true)
-  const carbs = ingredientNum(raw.carbs, 2000, true)
-  const fat = ingredientNum(raw.fat, 2000, true)
-  const grams = ingredientNum(raw.grams, 10000, true)
-  if (kcal == null || protein == null || carbs == null || fat == null || !(grams > 0)) return null
+  const a = cleanAmount(raw, false)
+  // An emptied field is 0, never a reason to lose the line.
   return {
-    name, kcal, protein, carbs, fat, grams,
-    qty: cleanServingQty(raw.qty),
-    unit: cleanServingUnit(raw.unit),
+    name,
+    kcal: mealNum(raw.kcal, 20000, false),
+    protein: mealNum(raw.protein, 2000, true),
+    carbs: mealNum(raw.carbs, 2000, true),
+    fat: mealNum(raw.fat, 2000, true),
+    grams: a.grams,
+    qty: a.qty,
+    unit: a.unit,
+    units: a.units,
   }
 }
 
@@ -484,40 +501,47 @@ function ingredientTotals(list) {
     carbs += Number(item.carbs) || 0
     fat += Number(item.fat) || 0
   }
-  return {
-    kcal: Math.round(kcal),
-    protein: round1(protein),
-    carbs: round1(carbs),
-    fat: round1(fat),
-  }
+  return { kcal: Math.round(kcal), protein: round1(protein), carbs: round1(carbs), fat: round1(fat) }
 }
 
-function withIngredientTotals(entry, ingredients) {
-  return { ...entry, ...ingredientTotals(ingredients), ingredients }
+/**
+ * The meal with these ingredients: its calories and macros are their sum, and its weight is
+ * theirs too when every line has one. The meal keeps reading as the same count ("1 bowl")
+ * — the bowl just holds more or less — unless it is shown as a weight or a volume.
+ */
+export function withIngredients(meal, ingredients) {
+  const list = Array.isArray(ingredients) ? ingredients : []
+  if (!list.length) return { ...meal, ingredients: [] }
+  const next = { ...meal, ...ingredientTotals(list), ingredients: list }
+  const known = list.every(r => Number(r.grams) > 0)
+  if (!known) return next
+  const grams = round1(list.reduce((n, r) => n + Number(r.grams), 0))
+  return regram(next, grams)
 }
 
-/** Scale one line by `factor`. A line with no gram basis keeps that gap — macros still follow the portion. */
-function scaleLineByFactor(item, factor) {
-  const from = Number(item?.grams)
-  const next = {
-    ...item,
-    kcal: Math.round((Number(item?.kcal) || 0) * factor),
-    protein: round1((Number(item?.protein) || 0) * factor),
-    carbs: round1((Number(item?.carbs) || 0) * factor),
-    fat: round1((Number(item?.fat) || 0) * factor),
+/** Set a meal's weight without scaling its food: count units grow with it, the count stays. */
+function regram(meal, grams) {
+  const a = amountOf(meal)
+  if (a.grams === grams) return meal
+  let units = a.units
+  if (a.grams) {
+    const f = grams / a.grams
+    units = cleanUnits(units.map(u => (isCount(u.unit) ? { ...u, g: u.g * f } : u)))
+  } else if (isCount(a.unit)) {
+    units = cleanUnits([{ unit: a.unit, g: grams / (a.qty || 1) }, ...units])
   }
-  if (from > 0) next.grams = from * factor
-  return next
+  const per = gramsPer({ grams, servingUnit: a.unit, units }, a.unit)
+  const unit = per > 0 ? a.unit : 'g'
+  const qty = per > 0 ? grams / per : grams
+  return { ...meal, grams, units, servingUnit: unit, servingQty: round3(qty) }
 }
 
 /**
  * A food-log entry ready to store. Null when the name or the day is missing.
  * `edited` stays set once the person changes a number the model suggested.
- * Up to 20 ingredients are kept. Junk rows are dropped. When any remain, calories and
- * macros are their sum — the meal's own gram basis is left as given.
- * `servingQty` is a positive count (missing or junk becomes 1) and `servingUnit` is
- * g, ml, cup, tbsp, piece, slice, or serving (anything else becomes serving). Each
- * ingredient keeps the same `qty` and `unit`.
+ * Up to 20 ingredients are kept; a line with an empty number keeps it as 0. When any remain,
+ * calories, macros and (when every line is weighed) grams are their sum.
+ * `servingQty`/`servingUnit` is how the amount is shown; `units` lists `{ unit, g }`.
  */
 export function cleanMeal(raw, { day, id, source } = {}) {
   const name = String(raw?.name ?? '').trim().slice(0, 120)
@@ -525,20 +549,23 @@ export function cleanMeal(raw, { day, id, source } = {}) {
   if (!name || !d) return null
   const meal = MEALS.includes(raw?.meal) ? raw.meal : 'snack'
   const src = MEAL_SOURCES.includes(raw?.source) ? raw.source : (MEAL_SOURCES.includes(source) ? source : 'manual')
-  const grams = raw?.grams == null || raw?.grams === '' ? null : mealNum(raw.grams, 10000, true)
   const media = Array.isArray(raw?.media) ? raw.media.filter(m => m && typeof m === 'object').slice(0, 3) : []
+  const a = cleanAmount(raw, true)
   const entry = {
     id: raw?.id || id,
     d,
     t: Number(raw?.t) || Date.now(),
+    // When it was eaten. `t` doubles as the sync stamp and moves with every edit; this does not.
+    at: Number(raw?.at) || Number(raw?.t) || Date.now(),
     name,
     kcal: mealNum(raw?.kcal, 20000, false),
     protein: mealNum(raw?.protein, 2000, true),
     carbs: mealNum(raw?.carbs, 2000, true),
     fat: mealNum(raw?.fat, 2000, true),
-    grams,
-    servingQty: cleanServingQty(raw?.servingQty),
-    servingUnit: cleanServingUnit(raw?.servingUnit),
+    grams: a.grams,
+    servingQty: a.qty,
+    servingUnit: a.unit,
+    units: a.units,
     meal,
     source: src,
     note: String(raw?.note ?? '').trim().slice(0, 280),
@@ -547,113 +574,89 @@ export function cleanMeal(raw, { day, id, source } = {}) {
   }
   const ingredients = cleanIngredients(raw?.ingredients)
   if (!ingredients.length) return entry
-  return withIngredientTotals(entry, ingredients)
+  return withIngredients(entry, ingredients)
 }
 
-/**
- * Scale kcal and macros from the entry's gram basis to `grams`. Unchanged when the entry has
- * no positive gram basis — there is nothing honest to scale from, and ingredient grams are
- * not used to invent one. When the meal has ingredients, each line scales with it and the
- * calories and macros become the sum of the lines. An ingredient amount (`qty`) is left
- * as stored — gram scaling does not invent one.
- */
-export function scaleToGrams(entry, grams) {
-  const from = Number(entry?.grams)
-  const to = Number(grams)
-  if (!(from > 0) || !(to >= 0) || !entry) return entry
-  const f = to / from
-  const scale = n => round1((Number(n) || 0) * f)
-  const scaled = {
-    ...entry,
-    grams: to,
-    kcal: Math.round((Number(entry.kcal) || 0) * f),
-    protein: scale(entry.protein),
-    carbs: scale(entry.carbs),
-    fat: scale(entry.fat),
+function scaleNumbers(item, f) {
+  return {
+    ...item,
+    kcal: Math.round((Number(item?.kcal) || 0) * f),
+    protein: round1((Number(item?.protein) || 0) * f),
+    carbs: round1((Number(item?.carbs) || 0) * f),
+    fat: round1((Number(item?.fat) || 0) * f),
   }
-  const list = entry.ingredients
-  if (!Array.isArray(list) || !list.length) return scaled
-  return withIngredientTotals(scaled, list.map(item => scaleLineByFactor(item, f)))
 }
 
-/**
- * Scale one ingredient to `grams`, then set the meal's calories and macros to the sum of the
- * list. The meal's own gram basis is unchanged. Unchanged when that line has no gram basis,
- * or when `index` is not a line on the meal.
- */
-export function scaleIngredient(entry, index, grams) {
-  const list = entry?.ingredients
-  if (!entry || !Array.isArray(list) || !Number.isInteger(index) || index < 0 || index >= list.length) return entry
-  const from = Number(list[index]?.grams)
-  const to = Number(grams)
-  if (!(from > 0) || !(to >= 0)) return entry
-  const ingredients = list.map((row, i) => {
-    if (i !== index) return row
-    return { ...scaleLineByFactor(row, to / from), grams: to }
-  })
-  return withIngredientTotals(entry, ingredients)
-}
-
-function scaleServingLine(item, factor) {
-  const next = scaleLineByFactor(item, factor)
-  const qty = Number(item?.qty)
-  if (qty > 0) next.qty = qty * factor
+/** One line `f` times as big, still in its own unit. */
+function scaleLine(row, f) {
+  const next = scaleNumbers(row, f)
+  const grams = Number(row.grams)
+  if (grams > 0) {
+    next.grams = round1(grams * f)
+    const per = gramsPer(row, row.unit)
+    next.qty = round3(per > 0 ? next.grams / per : (Number(row.qty) || 1) * f)
+  } else next.qty = round3((Number(row.qty) || 1) * f)
   return next
 }
 
 /**
- * Scale calories, macros, grams, and every ingredient from the entry's serving count
- * to `qty`. Unchanged when the current count is missing or not positive — a new count
- * is not used to invent a scale. After a scale, `servingQty` is `qty` and the unit stays.
+ * The same food at a new amount, scaled from `base` — a snapshot taken when editing started,
+ * so typing 1, 15, 150 never compounds. Works for a meal or an ingredient. With a weight, the
+ * amount becomes grams through the unit; without one, it scales by the count. Unchanged when
+ * the amount is not positive or the unit cannot be measured.
  */
-export function scaleToServings(entry, qty) {
-  const from = Number(entry?.servingQty)
+export function resize(base, qty, unit) {
   const to = Number(qty)
-  if (!entry || !(from > 0) || !(to > 0)) return entry
-  const f = to / from
-  const scale = n => round1((Number(n) || 0) * f)
-  const scaled = {
-    ...entry,
-    servingQty: to,
-    kcal: Math.round((Number(entry.kcal) || 0) * f),
-    protein: scale(entry.protein),
-    carbs: scale(entry.carbs),
-    fat: scale(entry.fat),
+  if (!base || !(to > 0)) return base
+  const meal = 'servingUnit' in base || 'servingQty' in base
+  const a = amountOf(base)
+  const u = normalizeUnit(unit) || a.unit
+  let f, grams = null
+  const per = a.grams ? gramsPer(base, u) : null
+  if (per > 0) { grams = to * per; f = grams / a.grams }
+  else if (u === a.unit) f = to / (a.qty || 1)
+  else return base
+  let next = scaleNumbers(base, f)
+  if (meal) {
+    next.servingQty = round3(to)
+    next.servingUnit = u
+  } else {
+    next.qty = round3(to)
+    next.unit = u
   }
-  const grams = Number(entry.grams)
-  if (grams > 0) scaled.grams = grams * f
-  const list = entry.ingredients
-  if (!Array.isArray(list) || !list.length) return scaled
-  return withIngredientTotals(scaled, list.map(item => scaleServingLine(item, f)))
+  next.grams = grams != null ? round1(grams) : a.grams
+  const list = base.ingredients
+  if (meal && Array.isArray(list) && list.length) {
+    next = { ...next, ...ingredientTotals(list.map(r => scaleLine(r, f))), ingredients: list.map(r => scaleLine(r, f)) }
+  }
+  return next
 }
 
-function convertQty(qty, from, to) {
-  const n = Number(qty)
-  if (!(n > 0)) return null
-  return n * ML_PER_UNIT[from] / ML_PER_UNIT[to]
+/** Show the same amount in another unit. Calories never change. Unchanged without a weight. */
+export function changeUnit(item, unit) {
+  const u = normalizeUnit(unit)
+  const a = amountOf(item)
+  if (!item || !u || !a.grams) return item
+  const per = gramsPer(item, u)
+  if (!(per > 0)) return item
+  const qty = round3(a.grams / per)
+  return 'servingUnit' in item || 'servingQty' in item
+    ? { ...item, servingQty: qty, servingUnit: u }
+    : { ...item, qty, unit: u }
 }
 
 /**
- * Convert a liquid serving among ml, cup, and tbsp (1 cup = 240 ml, 1 tbsp = 15 ml).
- * The count changes. Calories do not. An ingredient line converts only when its own
- * unit is a liquid. Piece, slice, serving, and g do not convert into a liquid or
- * into each other — those pairs return the same object. Grams stay a weight label.
+ * A typed meal total ("this is 600 kcal") spread over the ingredients in proportion to what
+ * each already has. When they all had 0 of it, it is shared by weight, or evenly.
  */
-export function convertServingUnit(entry, unit) {
-  const from = liquidUnit(entry?.servingUnit)
-  const to = liquidUnit(unit)
-  if (!entry || !from || !to || from === to) return entry
-  const servingQty = convertQty(entry.servingQty, from, to)
-  if (servingQty == null) return entry
-  const list = entry.ingredients
-  const ingredients = Array.isArray(list)
-    ? list.map(item => {
-      const line = liquidUnit(item?.unit)
-      if (!line || line === to) return item
-      const qty = convertQty(item?.qty, line, to)
-      if (qty == null) return item
-      return { ...item, qty, unit: to }
-    })
-    : list
-  return { ...entry, servingQty, servingUnit: to, ingredients }
+export function setMealTotal(meal, key, value) {
+  const to = Math.max(0, Number(value) || 0)
+  const list = meal?.ingredients
+  if (!Array.isArray(list) || !list.length) return { ...meal, [key]: key === 'kcal' ? Math.round(to) : round1(to) }
+  const from = list.reduce((n, r) => n + (Number(r[key]) || 0), 0)
+  const weight = list.reduce((n, r) => n + (Number(r.grams) || 0), 0)
+  const share = r => from > 0 ? (Number(r[key]) || 0) / from
+    : weight > 0 ? (Number(r.grams) || 0) / weight : 1 / list.length
+  const rnd = key === 'kcal' ? Math.round : round1
+  return withIngredients(meal, list.map(r => ({ ...r, [key]: rnd(to * share(r)) })))
 }

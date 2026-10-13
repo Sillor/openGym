@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { effectiveRoutines, effectiveRoutineIds, nextTrainingDay, streakWeeks, lastBW, setsDoneActive } from '../lib/history.js'
 import { fmtNum, fmtDate, todayISO, isoOf, weekStartOf, weekDayOffset, DAYS, DAYN } from '../lib/format.js'
-import { dayTotals, profileTargets } from '../lib/nutrition.js'
+import HomeFoodCard from '../components/food/HomeFoodCard.jsx'
 import { t, tn, dateLocale } from '../lib/i18n.js'
 import { bwSheet, goalSheet, dayOverrideSheet, calendarSheet, startFlow, starterPlanSheet, bwDeltaColor, weighInsSheet } from '../sheets.jsx'
 import LineChart from '../components/LineChart.jsx'
@@ -224,7 +224,7 @@ export default function Home() {
         : t("No weigh-ins yet. Log your weight to start the curve (we also ask before every workout).")}</div>}
     </div>}
 
-    {S.showNutritionCard !== false && <NutritionHomeCard S={S} onOpen={() => nav('/nutrition')} onPhoto={() => nav('/nutrition?capture=1')} />}
+    {S.showNutritionCard !== false && <HomeFoodCard S={S} onOpen={() => nav('/food')} onPhoto={() => nav('/food?capture=1')} />}
 
     <div className="card tappable" style={{ cursor: 'pointer' }} {...tappable(() => calendarSheet())}>
       <div className="row between">
@@ -241,39 +241,3 @@ export default function Home() {
   </div>
 }
 
-function MacroBits({ eaten, target, color }) {
-  const pct = target > 0 ? Math.min(100, Math.round((eaten / target) * 100)) : 0
-  return <div style={{ flex: 1, minWidth: 0 }}>
-    <div style={{ height: 5, borderRadius: 3, background: 'var(--surface-2)', overflow: 'hidden' }}>
-      <div style={{ height: '100%', width: pct + '%', background: color }} />
-    </div>
-  </div>
-}
-
-function NutritionHomeCard({ S, onOpen, onPhoto }) {
-  const totals = dayTotals(S.foodLog, todayISO())
-  const targets = profileTargets(S).targets
-  const left = targets ? targets.kcal - totals.kcal : null
-  const hero = left == null ? totals.kcal : Math.abs(left)
-  const label = left == null ? t('kcal eaten') : left >= 0 ? t('kcal left') : t('kcal over')
-  return <div className="card">
-    <div className="row between" style={{ marginBottom: 6 }}>
-      <h2 style={{ margin: 0 }}>{t('Nutrition')}</h2>
-      <Button size="sm" variant="ghost" trailingIcon="chevronRight" onClick={onOpen}>{t('Diary')}</Button>
-    </div>
-    <button type="button" onClick={onOpen} style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textAlign: 'start', cursor: 'pointer' }}>
-      <div className="row" style={{ gap: 8, alignItems: 'baseline' }}>
-        <div className="big" style={left != null && left < 0 ? { color: 'var(--red)' } : undefined}>{fmtNum(hero)}</div>
-        <span className="muted" style={{ fontSize: '1rem' }}>{label}</span>
-      </div>
-    </button>
-    <div className="row" style={{ gap: 8, marginTop: 10 }}>
-      <MacroBits eaten={totals.protein} target={targets?.protein || 0} color="var(--blue)" />
-      <MacroBits eaten={totals.carbs} target={targets?.carbs || 0} color="var(--orange)" />
-      <MacroBits eaten={totals.fat} target={targets?.fat || 0} color="var(--green)" />
-    </div>
-    <div className="muted small" style={{ marginTop: 6 }}>{t('{0} g protein · {1} g carbs · {2} g fat', fmtNum(totals.protein), fmtNum(totals.carbs), fmtNum(totals.fat))}</div>
-    <div style={{ height: 10 }} />
-    <Button variant="primary" icon="camera" onClick={onPhoto}>{t('Photo')}</Button>
-  </div>
-}

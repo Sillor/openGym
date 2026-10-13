@@ -177,11 +177,12 @@ describe('importFudDiary', () => {
     expect(out.entries.map(e => e.id)).toEqual(['m1', 'm2'])
     const rice = out.entries[0]
     expect(rice).toMatchObject({
-      d: '2026-08-05', name: 'Rice bowl', kcal: 260, protein: 5, carbs: 56, fat: 1,
+      d: '2026-08-05', name: 'Rice bowl', kcal: 350, protein: 5, carbs: 56, fat: 11,
       grams: 250, meal: 'lunch', source: 'manual', note: 'leftovers', media: [], edited: false,
     })
     expect(rice.ingredients).toEqual([
-      { name: 'rice', kcal: 260, protein: 5, carbs: 56, fat: 1, grams: 200, qty: 1, unit: 'serving' },
+      { name: 'rice', kcal: 260, protein: 5, carbs: 56, fat: 1, grams: 200, qty: 200, unit: 'g', units: [] },
+      { name: 'oil', kcal: 90, protein: 0, carbs: 0, fat: 10, grams: null, qty: 1, unit: 'serving', units: [] },
     ])
     const at = new Date(rice.t)
     expect(at.getFullYear()).toBe(2026)
@@ -198,7 +199,6 @@ describe('importFudDiary', () => {
     expect(json).not.toContain('keep-me-not')
     expect(json).not.toContain('base64')
     expect(json).toContain('rice')
-    expect(json).not.toContain('oil')
   })
 
   it('rejects a different format_version', () => {

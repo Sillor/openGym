@@ -43,7 +43,7 @@ describe('the tab bar across a store write', () => {
   it('keeps the very same buttons instead of rebuilding them every tick', () => {
     act(() => { root.render(<TabBar onStart={() => {}} />) })
     const before = tabs()
-    expect(before).toHaveLength(5)
+    expect(before).toHaveLength(6)
 
     // What a rest does once a second: S is replaced, so everything reading it re-renders.
     act(() => { useStore.getState().update(s => { s.restSec = 91 }, false) })
@@ -92,8 +92,8 @@ describe('the tab icons and labels', () => {
   const label = el => el.querySelector('span:last-child').textContent
   it('labels every tab and uses one icon per concept', () => {
     act(() => { root.render(<TabBar onStart={() => {}} />) })
-    expect(tabs().map(icon)).toEqual(['house', 'calendar', 'play', 'chart', 'dumbbell'])
-    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Stats', 'Exercises'])
+    expect(tabs().map(icon)).toEqual(['house', 'calendar', 'play', 'fork', 'chart', 'dumbbell'])
+    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Food', 'Stats', 'Exercises'])
 
     act(() => { useStore.getState().update(s => { s.active = { id: 'a', entries: [], cur: 0 } }, false) })
     expect(icon(tabs()[2])).toBe('play')
@@ -134,16 +134,18 @@ describe('the Coach tab', () => {
     route.nav = nav
     coachOn()
     at('/home')
-    expect(tabs().map(icon)).toEqual(['house', 'calendar', 'play', 'chart', 'sparkles'])
-    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Stats', 'Coach'])
-    act(() => tabs()[4].click())
+    expect(tabs().map(icon)).toEqual(['house', 'calendar', 'play', 'fork', 'chart', 'sparkles'])
+    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Food', 'Stats', 'Coach'])
+    act(() => tabs()[5].click())
     expect(nav).toHaveBeenCalledWith('/coach')
+    act(() => tabs()[3].click())
+    expect(nav).toHaveBeenCalledWith('/food')
   })
 
   it('keeps the Exercises tab where the Coach is not available', () => {
     useStore.setState({ config: { coach: { enabled: false } } })
     at('/home')
-    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Stats', 'Exercises'])
+    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Food', 'Stats', 'Exercises'])
     // switched on, but a guest has no account to run it under: still no Coach
     const isGuest = useStore.getState().isGuest
     try {

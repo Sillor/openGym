@@ -55,7 +55,7 @@ function cleanValue(v) {
   return v
 }
 
-const INGREDIENT_KEYS = ['name', 'kcal', 'protein', 'carbs', 'fat', 'grams', 'qty', 'unit']
+const INGREDIENT_KEYS = ['name', 'kcal', 'protein', 'carbs', 'fat', 'grams', 'qty', 'unit', 'units']
 
 function copyIngredients(raw) {
   if (!Array.isArray(raw) || !raw.length) return undefined
@@ -78,6 +78,7 @@ function copyEntry(e) {
     id: e.id,
     d: e.d,
     t: e.t,
+    ...(Number(e.at) > 0 ? { at: e.at } : {}),
     name: e.name,
     kcal: e.kcal,
     protein: e.protein,
@@ -92,6 +93,7 @@ function copyEntry(e) {
   }
   if (e.servingQty != null && e.servingQty !== '') entry.servingQty = e.servingQty
   if (e.servingUnit != null && e.servingUnit !== '') entry.servingUnit = e.servingUnit
+  if (Array.isArray(e.units) && e.units.length) entry.units = cleanValue(e.units)
   const ingredients = copyIngredients(e.ingredients)
   if (ingredients) entry.ingredients = ingredients
   return entry
@@ -162,13 +164,19 @@ function fudIngredients(raw) {
   if (!Array.isArray(raw)) return undefined
   return raw.map(row => {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+    // Fud AI writes 0 g for a line whose weight it does not know. That line is still food:
+    // it stays as one serving instead of vanishing from the meal's total.
+    const grams = Number(row.quantity_g) > 0 ? Number(row.quantity_g) : null
     return {
       name: row.name,
       kcal: row.calories,
       protein: row.protein_g,
       carbs: row.carbs_g,
       fat: row.fat_g,
-      grams: row.quantity_g,
+      grams,
+      qty: grams || 1,
+      unit: grams ? 'g' : 'serving',
+      units: [],
     }
   })
 }

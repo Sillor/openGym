@@ -163,12 +163,14 @@ function nutritionTargets({
   const formulaProtein = trunc(proteinPer * kg)
   const formulaFat = trunc(0.6 * kg)
   const formulaCarbs = Math.max(0, trunc((formulaKcal - formulaProtein * 4 - formulaFat * 9) / 4))
-  return {
-    kcal: customKcal == null ? formulaKcal : trunc(customKcal),
-    protein: customProtein == null ? formulaProtein : trunc(customProtein),
-    fat: customFat == null ? formulaFat : trunc(customFat),
-    carbs: customCarbs == null ? formulaCarbs : trunc(customCarbs),
-  }
+  const kcal = customKcal == null ? formulaKcal : trunc(customKcal)
+  const protein = customProtein == null ? formulaProtein : trunc(customProtein)
+  const fat = customFat == null ? formulaFat : trunc(customFat)
+  // Carbs fill whatever the calorie target leaves, so a custom target still adds up.
+  const carbs = customCarbs != null ? trunc(customCarbs)
+    : customKcal == null && customProtein == null && customFat == null ? formulaCarbs
+      : Math.max(0, trunc((kcal - protein * 4 - fat * 9) / 4))
+  return { kcal, protein, fat, carbs }
 }
 
 function mealNum(v, max, dec) {

@@ -3,7 +3,7 @@
 // per 100 g otherwise, so grams stay the scale basis. A missing product is
 // { ok:false, error:'missing' }. Product photos are not requested.
 
-const FIELDS = 'product_name,brands,nutriments,serving_size,serving_quantity'
+const FIELDS = 'product_name,brands,nutriments,serving_size,serving_quantity,serving_quantity_unit'
 const USER_AGENT = 'openGym/1.4 (self-hosted food diary)'
 // energy_* on Open Food Facts is kilojoules. Same factor as the Android lookup.
 const KJ_TO_KCAL = 0.23900573614
@@ -20,7 +20,8 @@ export function normalizeBarcode(raw) {
 /**
  * Look up a barcode. `{ ok:true, item }` or `{ ok:false, error }`.
  * `error` is invalid, missing, or network.
- * `item` is `{ name, kcal, protein, carbs, fat, grams }`.
+ * `item` is `{ name, kcal, protein, carbs, fat, grams, servingQty, servingUnit, units }`: one
+ * serving when the label has one, otherwise 100 g (or 100 ml for a drink).
  * Pass `fetchImpl` in tests so the request stays off the network.
  */
 export async function lookupFoodBarcode(code, { fetchImpl } = {}) {
@@ -62,6 +63,11 @@ function itemFromBody(body, barcode) {
   if (kcal == null && protein == null && carbs == null && fat == null) {
     return { ok: false, error: 'missing' }
   }
+  // A drink is poured, not weighed: ml at about 1 g each, the way the label counts it.
+  const liquid = isLiquid(product)
+  const units = []
+  if (perServing) units.push({ unit: 'serving', g: round1(grams) })
+  if (liquid) units.push({ unit: 'ml', g: 1 })
   return {
     ok: true,
     item: {
@@ -71,6 +77,9 @@ function itemFromBody(body, barcode) {
       carbs: round1(carbs || 0),
       fat: round1(fat || 0),
       grams: round1(grams),
+      servingQty: perServing ? 1 : 100,
+      servingUnit: perServing ? 'serving' : liquid ? 'ml' : 'g',
+      units,
     },
   }
 }
@@ -81,6 +90,12 @@ function servingBasis(product) {
   const raw = qty != null && qty > 0 ? qty : gramsFrom(product.serving_size)
   if (raw == null || !(raw > 0)) return null
   return round1(Math.max(raw, 1))
+}
+
+function isLiquid(product) {
+  const unit = text(product.serving_quantity_unit).toLowerCase()
+  if (unit === 'ml' || unit === 'l' || unit === 'cl') return true
+  return /\d\s*(ml|cl|l|fl\.? oz)\b/i.test(text(product.serving_size))
 }
 
 function macro(nutriments, key, perServing, scale) {
