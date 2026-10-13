@@ -1026,3 +1026,42 @@ describe('food log across devices', () => {
     expect(localExtras(server, server).food).toBeUndefined()
   })
 })
+
+describe('a cleared Coach chat stays cleared', () => {
+  it('drops chat lines written before the later chatClearedAt, even when the other copy is newer', () => {
+    // coach is taken whole from the newer copy. A device that never saw the clear but has
+    // written one line since would otherwise bring every cleared line back with it.
+    const phone = base({
+      _ts: 100,
+      coach: { chat: [], chatClearedAt: 500, profile: { goal: 'muscle' }, consent: { version: 4 } }
+    })
+    const desktop = base({
+      _ts: 200,
+      coach: {
+        chat: [
+          { id: 'old', kind: 'text', at: 100, role: 'user' },
+          { id: 'kept', kind: 'text', at: 600, role: 'coach' }
+        ],
+        profile: { goal: 'strength' }
+      }
+    })
+    const m = mergeStates(phone, desktop)
+    expect(m.coach.chatClearedAt).toBe(500)
+    expect(m.coach.chat.map(x => x.id)).toEqual(['kept'])
+    expect(m.coach.profile.goal).toBe('strength')
+  })
+
+  it('keeps the later clear of the two and an empty chat that was cleared on the newer copy', () => {
+    const cleared = base({
+      _ts: 200,
+      coach: { chat: [], chatClearedAt: 800, profile: { goal: 'x' } }
+    })
+    const stale = base({
+      _ts: 50,
+      coach: { chat: [{ id: 'ghost', kind: 'text', at: 10 }], chatClearedAt: 5 }
+    })
+    const m = mergeStates(cleared, stale)
+    expect(m.coach.chatClearedAt).toBe(800)
+    expect(m.coach.chat).toEqual([])
+  })
+})

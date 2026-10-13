@@ -321,6 +321,10 @@ export default function AdminCoach() {
           <div className="adm-kv"><span className="k">Whole instance, per day</span>
             <span className="v"><input className="num" type="number" min="0" max="5000" defaultValue={d.caps.instanceDaily} disabled={busy}
               onBlur={capBlur('instanceDaily')} /></span></div>
+          <div className="adm-kv"><span className="k">Chat messages, per user, per day</span>
+            <span className="v"><input className="num" type="number" min="0" max="2000" defaultValue={d.caps.chatDaily ?? 200} disabled={busy}
+              onBlur={capBlur('chatDaily')} /></span></div>
+          <div className="adm-hint" style={{ marginTop: 10 }}>Chat is counted separately from plan and review jobs (default 200). 0 means no limit.</div>
           <div className="adm-hint" style={{ marginTop: 10 }}>How long a chat message, refinement or review note can be. The chat composer and the server both enforce this.</div>
           <div className="adm-kv"><span className="k">Max message length</span>
             <span className="v"><input className="num" type="number" min="200" max="4000" defaultValue={d.maxMessageLen} disabled={busy}

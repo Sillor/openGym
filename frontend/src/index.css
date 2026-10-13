@@ -67,6 +67,10 @@
   /* height of the connection indicator under the status bar, 0 while there is none — set by
      components/SyncBanner.jsx. Whatever starts at the top of the screen starts below it. */
   --conn:0px;
+  /* How far up the screen the tab bar reaches, for what has to sit right on top of it — the Coach
+     chat's composer, while body.coach-tabbar says the bar is there (App.jsx). The phone bar is
+     58px above the home indicator; the desktop one floats 16px off the bottom (see ≥1000px). */
+  --tabbar-h:calc(58px + var(--sab));
 }
 
 :root[data-theme="light"] {
@@ -244,6 +248,10 @@ button.conn:active{filter:brightness(1.12)}
 .hdr.lib-hdr{flex-wrap:wrap;align-items:center;row-gap:0}
 .hdr.lib-hdr>.sub.lib-count{flex:1 0 100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:360px){.hdr.lib-hdr>.sub.lib-count{white-space:normal;overflow:visible;text-overflow:clip}}
+/* The same two inside Plan's Exercises view, where Plan's header is the page's: one line. */
+.lib-bar{margin:0 0 12px}
+.lib-bar>.lib-count{flex:1;min-width:0;color:var(--label-2);font-size:14px;letter-spacing:-.006em}
+.lib-bar>.btn{flex:none;margin-inline-start:auto}
 
 .iconbtn{
   width:36px;height:36px;border-radius:50%;flex:none;
@@ -278,6 +286,108 @@ h4.sec{
    55px, so the button pair may drop to a second line — still flush right, hence the auto margin. */
 .bw-head{flex-wrap:wrap;row-gap:8px}
 .bw-head>.row{margin-inline-start:auto}
+/* Buttons that share a row. A .btn is width:100%, and in a flex row that basis will not
+   shrink below the label, so a third control (Gallery, on a 390px phone) left the card.
+   Each control stays as wide as its label, and one that does not fit wraps onto the next
+   line instead of painting past the card. A field in the same row keeps the leftover width. */
+.btn-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.btn-row>.btn{flex:0 1 auto;width:auto;max-width:100%;min-width:min(100%,max-content);padding-inline:12px}
+.btn-row>.field{flex:1 1 9rem;width:auto;min-width:0}
+.btn-row:has(>.field)>.btn{flex:0 1 auto}
+/* Diary day bar. Back stays on the left. Previous day, the date, and next day share the
+   rest of the line, and the date is centered in the space between the arrows. A native
+   date control keeps its picker glyph in the padding, which shoves the text off that
+   center, so the glyph is lifted out of the flow (the field itself still opens it). */
+.hdr.nut-hdr{align-items:center;gap:8px}
+.nut-day{flex:1;min-width:0;display:flex;align-items:center}
+.nut-date{
+  position:relative;flex:1;min-width:0;height:36px;margin:0;padding:0;
+  background:transparent;color:inherit;border:0;
+  font:inherit;font-weight:600;letter-spacing:-.02em;text-align:center;
+}
+.nut-date::-webkit-datetime-edit{display:inline-flex;width:100%;justify-content:center;padding:0}
+.nut-date::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}
+.nut-date::-webkit-clear-button,.nut-date::-webkit-inner-spin-button{display:none}
+/* Photo, Type, and Barcode share one line. A .btn will not shrink below its label,
+   so on a phone the third control used to wrap and sit alone under the other two. */
+.nut-acts{flex-wrap:nowrap;margin-top:14px}
+.nut-acts>.btn{
+  flex:1 1 0;width:auto;min-width:0;max-width:none;
+  padding:12px 6px;font-size:15px;gap:5px;
+}
+.nut-acts>.btn:not(.primary){background:var(--surface-2);color:var(--label);font-weight:600}
+.nut-acts>.btn .icn{font-size:17px}
+.nut-acts>.btn>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nut-entry{margin-top:14px;align-items:stretch}
+.card .nut-entry>.field{background:var(--surface-2)}
+.sheet:has(.nut-review){
+  min-height:min(88dvh,calc(100dvh - var(--sat) - 8px));
+  padding-top:0;
+  display:flex;flex-direction:column;
+}
+.sheet:has(.nut-review)>.grab{position:absolute;z-index:3;left:0;right:0;top:8px;margin:0}
+.nut-review{display:flex;flex-direction:column;flex:1;min-height:0;padding-top:28px}
+.nut-review:has(.nut-review-photo){padding-top:0}
+.nut-review-photo{position:relative;margin:0 -18px 16px;height:240px;background:var(--surface);overflow:hidden}
+.nut-review-photo img,.nut-review-ph{width:100%;height:100%;object-fit:cover;display:block}
+.nut-review-ph{background:var(--surface)}
+.nut-review-photo .iconbtn{position:absolute;top:12px;inset-inline-end:12px;z-index:4;background:rgba(0,0,0,.45);color:#fff}
+.nut-review-body{padding:0 0 8px}
+.nut-title{display:block;width:100%;background:none;text-align:start;font-size:22px;font-weight:600;letter-spacing:-.021em;padding:0;margin:0 0 8px;color:var(--label)}
+.nut-serving{margin:0 0 12px}
+.nut-serving-edit,.nut-field{margin:0 0 12px}
+.nut-lbl{display:block;color:var(--label-2);font-size:13px;margin:0 2px 6px}
+.nut-field .chips{margin-top:8px}
+/* A plain .num is a browser text field, so on a phone it paints a white bar. Every
+   number in this sheet takes the app surface and label color. The large calorie
+   edit stays transparent and large; a macro edit stays inside its chip. */
+.nut-review input.num{
+  display:block;width:100%;background:var(--surface);color:var(--label);
+  border:0;border-radius:var(--r);padding:12px 14px;font-size:17px;outline:none;
+}
+.nut-review input.nut-kcal-input{
+  background:transparent;font-size:56px;font-weight:600;letter-spacing:-.03em;
+  padding:0;margin:4px 0 8px;border-radius:0;
+}
+/* Unit chips wrap inside the sheet. The shared .chips strip scrolls sideways, and on a
+   phone the last unit ("serving") sat past the edge of a 390px sheet. */
+.nut-serving-edit .chips,.nut-ing-view .chips{flex-wrap:wrap;overflow:visible;touch-action:auto}
+.nut-kcal{display:flex;align-items:baseline;gap:8px;background:none;padding:0;margin:4px 0 8px;color:var(--label)}
+.nut-review .big{font-size:56px;font-weight:600;letter-spacing:-.03em;line-height:1}
+.nut-kcal-u{color:var(--label-2);font-size:17px}
+.nut-macros{display:flex;gap:8px;margin:0 0 16px}
+.nut-macros>.chip,.nut-macros>.nut-macro-edit{flex:1;min-width:0}
+.nut-macro{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border-radius:var(--r);text-align:start}
+.nut-macro b,.nut-review .nut-macro-edit input.num{font-size:18px;font-weight:600;letter-spacing:-.02em}
+.nut-review .nut-macro-edit input.num{background:transparent;padding:0;margin:0;border-radius:0}
+.nut-macro span{font-size:12px;color:var(--label-2)}
+.nut-ing-list{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
+.nut-ing{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+  text-align:start;background:var(--surface);color:var(--label);
+  border-radius:var(--r);padding:12px 14px;min-height:48px;
+}
+.nut-ing-main{min-width:0;font-size:16px;letter-spacing:-.012em}
+.nut-ing-amt{flex:none;color:var(--label-2);font-size:15px;white-space:nowrap}
+.nut-back{margin:0 0 8px}
+.nut-ing-view .nut-review-body{flex:1;display:flex;flex-direction:column}
+.nut-ing-remove{margin-top:auto}
+.nut-quiet{display:block;background:none;color:var(--label-2);font-size:15px;padding:10px 4px;text-align:start}
+.nut-quiet.danger{color:var(--red)}
+.nut-review-foot{
+  position:sticky;bottom:0;z-index:2;display:flex;flex-direction:column;gap:8px;
+  padding:12px 0 4px;background:var(--bg-el);margin-top:auto;
+}
+.nut-review-actions{display:flex;gap:8px;flex-wrap:nowrap}
+.nut-review-actions>.btn{flex:1 1 0;min-width:0}
+:root[data-theme="light"] .sheet .nut-review-foot{background:var(--bg)}
+.nut-review-foot>.btn{flex:1 1 0;min-width:0}
+/* Meal groups and "Log again" are the same inset list. The name gives up width before
+   the calories or the trailing button can leave the row. */
+.nut-meals,.nut-again{margin-top:22px}
+.nut-meals .lrow-t,.nut-again .lrow-t{flex:1 1 auto;min-width:0}
+.nut-meals .lrow>.muted,.nut-again .lrow>.muted{flex:none;white-space:nowrap}
+.nut-again .lrow>.btn{flex:none}
 
 /* ----------------------------------------------------------------- card -- */
 .card{
@@ -1922,6 +2032,7 @@ button.wl-summary{width:100%;padding:0 0 10px;text-align:start;border-radius:var
   .narrow{max-width:640px;margin:0 auto}
   .tiles{grid-template-columns:repeat(4,1fr)}
   .cols .tiles,.center .tiles{grid-template-columns:1fr 1fr}   /* a 300px dialog has no room for four */
+  :root{--tabbar-h:78px}
   #tabbar{
     left:50%;right:auto;bottom:16px;transform:translateX(-50%);width:520px;
     border:var(--hair) solid var(--sep-op);border-radius:var(--r-xl);

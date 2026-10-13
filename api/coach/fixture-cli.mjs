@@ -49,6 +49,67 @@ function payload() {
 const P = payload();
 const kind = P.task || (/change-set/i.test(prompt) ? 'review' : 'create');
 
+if (kind === 'chat') {
+  const rounds = (prompt.match(/## Round \d+/g) || []).length;
+  const msg = ((prompt.match(/## Message\n\n([\s\S]*?)(?:\n---|\n## [A-Z]|$)/) || [])[1] || '').trim();
+  const planIds = (P.plan?.routines || []).flatMap(r => (r.ex || []).map(e => e.id)).filter(Boolean);
+  const routine = (P.plan?.routines || [])[0];
+  const first = routine?.ex?.[0];
+  const lastTool = () => {
+    const blocks = [...prompt.matchAll(/### Tool result[^\n]*\n\n```json\n([\s\S]*?)```/g)];
+    if (!blocks.length) return {};
+    try { return JSON.parse(blocks[blocks.length - 1][1]); } catch { return {}; }
+  };
+
+  if (rounds === 0) {
+    if (/protein|calor|kcal|macro|food|eat|diet|nutrition|target/i.test(msg)) {
+      out({ tool: 'show_nutrition', args: { summary: 'Logged days against your calorie and protein targets.' } });
+    }
+    if (/routine|plan|program|split|build/i.test(msg)) {
+      out({ tool: 'search_exercises', args: { query: 'press', limit: 8 } });
+    }
+    if (/swap|replace|change|set/i.test(msg) && routine && first) {
+      out({
+        tool: 'propose_changes',
+        args: {
+          title: 'Add one set',
+          summary: 'A little more volume where you asked for it.',
+          changes: [{
+            id: 'c1', type: 'sets', target: { routineId: routine.id, exId: first.id },
+            after: (first.sets || 3) + 1, why: 'You asked for this change.'
+          }]
+        }
+      });
+    }
+    if (planIds.length) {
+      out({ tool: 'show_exercises', args: { ids: planIds.slice(0, 4), note: 'From your current plan.' } });
+    }
+    out({ reply: 'Ask me to review a week, swap an exercise, build a routine, or check your protein.' });
+  }
+
+  if (/routine|plan|program|split|build/i.test(msg) && rounds === 1) {
+    const ids = (lastTool().results || []).map(e => e.id).filter(Boolean).slice(0, 6);
+    const pick = ids.length ? ids : planIds;
+    if (pick.length) {
+      out({
+        tool: 'propose_routines',
+        args: {
+          title: 'Full-body routine',
+          summary: 'A simple plan around the equipment you have.',
+          routines: [{
+            id: 'nr1', name: 'Full body A', emoji: 'figureStrength', prog: 'linear',
+            why: 'Compound-first, three sessions a week.',
+            ex: pick.slice(0, Math.min(6, Math.max(3, pick.length))).map(id => ({
+              id, sets: 3, mode: 'reps', reps: 8, prog: 'double', repsMin: 6, why: 'From the library.'
+            }))
+          }]
+        }
+      });
+    }
+  }
+  out({ reply: 'Here is what I found — confirm anything below if you want it applied.' });
+}
+
 // Well-formed JSON naming an exercise nobody has. This is the failure validate.js exists for,
 // and it is not the same as garbage: every check upstream of the validator is happy with it.
 // The fixture keeps saying it on the repair round too, because the interesting assertion is

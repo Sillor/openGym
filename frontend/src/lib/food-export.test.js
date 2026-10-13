@@ -54,6 +54,47 @@ describe('exportFoodDiary', () => {
     expect(all.entries.map(e => e.id)).toEqual(['old', 'edge', 'y', 'now', 'future'])
     expect(exportFoodDiary([], { range: 'all', today })).toMatchObject({ from: today, to: today, entries: [] })
   })
+
+  it('includes ingredients in JSON, strips base64, and leaves them off a meal that has none', () => {
+    const lined = meal({
+      ingredients: [
+        { name: 'rolled oats', kcal: 150, protein: 5, carbs: 27, fat: 3, grams: 40, image: B64, imageFilename: 'oats.jpg' },
+        { name: B64, kcal: 80, protein: 4, carbs: 6, fat: 4, grams: 20 },
+      ],
+    })
+    const doc = exportFoodDiary([lined], { range: 'all', today: '2026-08-05' })
+    expect(doc.entries[0].ingredients).toEqual([
+      { name: 'rolled oats', kcal: 150, protein: 5, carbs: 27, fat: 3, grams: 40 },
+      { kcal: 80, protein: 4, carbs: 6, fat: 4, grams: 20 },
+    ])
+    const json = JSON.stringify(doc)
+    expect(json).not.toContain('data:image')
+    expect(json).not.toContain('base64')
+    expect(json).not.toContain('oats.jpg')
+    expect(exportFoodDiary([meal()], { range: 'all', today: '2026-08-05' }).entries[0].ingredients).toBeUndefined()
+    const plain = exportFoodDiary([meal()], { range: 'all', today: '2026-08-05' })
+    expect(foodDiaryCsv(doc)).toBe(foodDiaryCsv(plain))
+  })
+
+  it('includes the serving and an ingredient amount in JSON, and leaves them off the CSV', () => {
+    const lined = meal({
+      servingQty: 1,
+      servingUnit: 'cup',
+      ingredients: [
+        { name: 'milk', kcal: 150, protein: 8, carbs: 12, fat: 8, grams: 240, qty: 1, unit: 'cup' },
+      ],
+    })
+    const doc = exportFoodDiary([lined], { range: 'all', today: '2026-08-05' })
+    expect(doc.entries[0].servingQty).toBe(1)
+    expect(doc.entries[0].servingUnit).toBe('cup')
+    expect(doc.entries[0].ingredients).toEqual([
+      { name: 'milk', kcal: 150, protein: 8, carbs: 12, fat: 8, grams: 240, qty: 1, unit: 'cup' },
+    ])
+    const csv = foodDiaryCsv(doc)
+    expect(csv.split('\n')[0]).toBe('date,time,meal,name,grams,kcal,protein,carbs,fat,note')
+    expect(csv).not.toContain('servingQty')
+    expect(csv).not.toContain('cup')
+  })
 })
 
 describe('foodDiaryCsv', () => {
@@ -103,7 +144,11 @@ const fud15 = {
           note: 'leftovers',
           imageFilename: 'meal.jpg',
           image: 'data:image/jpeg;base64,' + 'B'.repeat(80),
-          ingredients: [{ name: 'rice', quantity_g: 200, calories: 260, protein_g: 5, carbs_g: 56, fat_g: 1 }],
+          ingredients: [
+            { name: 'rice', quantity_g: 200, calories: 260, protein_g: 5, carbs_g: 56, fat_g: 1, imageFilename: 'rice.jpg' },
+            { name: '', quantity_g: 10, calories: 40, protein_g: 1, carbs_g: 2, fat_g: 1 },
+            { name: 'oil', quantity_g: 0, calories: 90, protein_g: 0, carbs_g: 0, fat_g: 10, imageFilename: 'oil.jpg' },
+          ],
         }],
       },
       {
@@ -132,21 +177,28 @@ describe('importFudDiary', () => {
     expect(out.entries.map(e => e.id)).toEqual(['m1', 'm2'])
     const rice = out.entries[0]
     expect(rice).toMatchObject({
-      d: '2026-08-05', name: 'Rice bowl', kcal: 500, protein: 20, carbs: 70, fat: 12,
+      d: '2026-08-05', name: 'Rice bowl', kcal: 260, protein: 5, carbs: 56, fat: 1,
       grams: 250, meal: 'lunch', source: 'manual', note: 'leftovers', media: [], edited: false,
     })
+    expect(rice.ingredients).toEqual([
+      { name: 'rice', kcal: 260, protein: 5, carbs: 56, fat: 1, grams: 200, qty: 1, unit: 'serving' },
+    ])
     const at = new Date(rice.t)
     expect(at.getFullYear()).toBe(2026)
     expect(at.getMonth()).toBe(7)
     expect(at.getDate()).toBe(5)
     expect(at.getHours()).toBe(12)
     expect(at.getMinutes()).toBe(30)
-    expect(out.entries[1]).toMatchObject({ name: 'Yogurt', meal: 'snack', grams: null, source: 'manual', media: [] })
+    expect(out.entries[1]).toMatchObject({ name: 'Yogurt', meal: 'snack', grams: null, kcal: 120, source: 'manual', media: [] })
+    expect(out.entries[1].ingredients).toBeUndefined()
     const json = JSON.stringify(out.entries)
     expect(json).not.toContain('meal.jpg')
+    expect(json).not.toContain('rice.jpg')
+    expect(json).not.toContain('oil.jpg')
     expect(json).not.toContain('keep-me-not')
     expect(json).not.toContain('base64')
-    expect(json).not.toContain('rice')
+    expect(json).toContain('rice')
+    expect(json).not.toContain('oil')
   })
 
   it('rejects a different format_version', () => {

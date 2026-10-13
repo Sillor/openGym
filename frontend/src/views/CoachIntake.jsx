@@ -15,7 +15,7 @@ import { useUI } from '../store/useUI.js'
 import { t } from '../lib/i18n.js'
 import { DAYN } from '../lib/format.js'
 import { EXDB } from '../lib/exercises.js'
-import { emptyCoach, coachAvailable, hasConsent, CONSENT_VERSION, CATEGORY_TEXT, appendChat } from '../lib/coach.js'
+import { emptyCoach, coachAvailable, hasConsent, CONSENT_VERSION, CATEGORY_TEXT, appendChat, profileLines } from '../lib/coach.js'
 import { requestPlan, disclosure, JOB_ERRORS } from '../lib/coach-api.js'
 import { DEMO } from '../lib/demo.js'
 import { MOBILE } from '../lib/mobile.js'
@@ -117,6 +117,22 @@ export default function CoachIntake() {
       // The server's refusal is English with its class beside it; the class picks the line.
       toast(JOB_ERRORS[e.data?.code] || e.message || t('Could not ask the Coach')); setBusy(false)
     }
+  }
+
+  // Consent is already on file from the first screen. Save whatever has been answered — the
+  // profile may be incomplete — and open the chat without starting a plan job. The Coach asks
+  // for missing details when it needs them.
+  const skipToChat = () => {
+    const profile = { ...p, daysPerWeek: Math.min(7, Math.max(1, p.daysPerWeek ?? 3)) }
+    update(s => {
+      const c = (s.coach = s.coach || emptyCoach())
+      if (!hasConsent(s)) c.consent = { agreedAt: new Date().toISOString(), version: CONSENT_VERSION }
+      c.profile = profile
+      if (!(c.chat || []).some(m => m.kind === 'intake') && profileLines(profile).length) {
+        appendChat(s, { role: 'user', kind: 'intake' })
+      }
+    })
+    nav('/coach', { replace: true })
   }
 
   const toggleDay = d => set({
@@ -228,10 +244,11 @@ export default function CoachIntake() {
       </>}
     </div>
 
-    {key !== 'consent' && <div className="ob-foot">
+    {key !== 'consent' && <div className="ob-foot" style={!editing ? { flexDirection: 'column' } : undefined}>
       <Button variant="primary" style={{ flex: 1 }} disabled={!canNext || busy} icon={last ? 'sparkles' : undefined} onClick={next}>
         {last ? (editing ? t('Save') : t('Build my plan')) : t('Continue')}
       </Button>
+      {!editing && <Button onClick={skipToChat}>{t('Skip, just chat')}</Button>}
     </div>}
     {(key === 'goal' || key === 'experience') && !canNext && <div className="ob-hint">{t('Pick one to continue.')}</div>}
   </div>

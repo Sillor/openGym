@@ -14,6 +14,7 @@ import { setSystemBarsLight } from './lib/system-bars.js'
 import { initBackButton } from './lib/back.js'
 import { useWakeLock } from './lib/wakelock.js'
 import { installViewportGuard } from './lib/viewport-guard.js'
+import { useKeyboardOpen } from './lib/keyboard-open.js'
 import { installChipDrag } from './lib/hchips.js'
 import { syncPushSubscription } from './lib/push.js'
 import { MOBILE } from './lib/mobile.js'
@@ -184,11 +185,20 @@ function Shell() {
     document.body.classList.toggle('no-tabbar', inWorkout)
     return () => document.body.classList.remove('no-tabbar')
   }, [inWorkout])
-  // The chat owns the bottom of the screen as well: its composer sits where the tabs would be.
+  // The Coach chat is a tab of its own, so it keeps the tab bar and its composer sits on top of
+  // it (body.coach-tabbar, --tabbar-h in index.css). While the keyboard is up the bar goes, and
+  // the composer has the bottom of the screen to itself, right above the keys.
   // The first-launch card has no tabs either: they changed the route behind it.
-  const noTabs = inWorkout || loc.pathname === '/coach' || needsMobileOnboarding
+  const onChat = loc.pathname === '/coach'
+  const typing = useKeyboardOpen(onChat)
+  const noTabs = inWorkout || (onChat && typing) || needsMobileOnboarding
 
   const authed = user || isGuest
+  const chatTabs = onChat && !noTabs && !!authed
+  useEffect(() => {
+    document.body.classList.toggle('coach-tabbar', chatTabs)
+    return () => document.body.classList.remove('coach-tabbar')
+  }, [chatTabs])
   if (!ready && !authed) return (
     <div id="app">
       <div style={{ paddingTop: '44vh', display: 'flex', justifyContent: 'center', fontSize: 34, color: 'var(--label-3)' }}>

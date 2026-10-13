@@ -8,20 +8,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TabBar from './TabBar.jsx'
 import { DEF, useStore } from '../store/useStore.js'
 
+const route = vi.hoisted(() => ({ path: '/home', nav: () => {} }))
 vi.mock('react-router-dom', () => ({
-  useNavigate: () => () => {},
-  useLocation: () => ({ pathname: '/home' }),
+  useNavigate: () => route.nav,
+  useLocation: () => ({ pathname: route.path }),
 }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-let host, root, originalS, originalUser
+let host, root, originalS, originalUser, originalConfig
 
 beforeEach(() => {
   const store = useStore.getState()
   originalS = store.S
   originalUser = store.user
-  useStore.setState({ S: JSON.parse(JSON.stringify(DEF)), user: { id: 1, name: 'test' } })
+  originalConfig = store.config
+  route.path = '/home'
+  route.nav = () => {}
+  useStore.setState({ S: JSON.parse(JSON.stringify(DEF)), user: { id: 1, name: 'test' }, config: null })
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -30,7 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   host.remove()
-  useStore.setState({ S: originalS, user: originalUser })
+  useStore.setState({ S: originalS, user: originalUser, config: originalConfig })
 })
 
 const tabs = () => [...host.querySelectorAll('#tabbar button')]
@@ -113,5 +117,54 @@ describe('the tab icons and labels', () => {
       act(() => { useStore.getState().update(s => { s.active.editingWorkoutId = 'w1' }, false) })
       expect(label(tabs()[2])).toBe('Edit workout')
     } finally { vi.useRealTimers() }
+  })
+})
+
+// The Coach redesign: where the Coach is available it takes the last tab, and the library moves
+// into Plan (Plan → Exercises). Without it the bar is exactly what it was.
+describe('the Coach tab', () => {
+  const icon = el => el.querySelector('svg')?.getAttribute('data-icon')
+  const label = el => el.querySelector('span:last-child').textContent
+  const lit = () => tabs().filter(b => b.classList.contains('on')).map(label)
+  const coachOn = () => useStore.setState({ config: { coach: { enabled: true } } })
+  const at = path => { route.path = path; act(() => { root.render(<TabBar onStart={() => {}} key={path} />) }) }
+
+  it('replaces Exercises where the Coach is available, and opens the chat', () => {
+    const nav = vi.fn()
+    route.nav = nav
+    coachOn()
+    at('/home')
+    expect(tabs().map(icon)).toEqual(['house', 'calendar', 'play', 'chart', 'sparkles'])
+    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Stats', 'Coach'])
+    act(() => tabs()[4].click())
+    expect(nav).toHaveBeenCalledWith('/coach')
+  })
+
+  it('keeps the Exercises tab where the Coach is not available', () => {
+    useStore.setState({ config: { coach: { enabled: false } } })
+    at('/home')
+    expect(tabs().map(label)).toEqual(['Home', 'Plan', 'Start', 'Stats', 'Exercises'])
+    // switched on, but a guest has no account to run it under: still no Coach
+    const isGuest = useStore.getState().isGuest
+    try {
+      useStore.setState({ config: { coach: { enabled: true } }, user: null, isGuest: () => true })
+      at('/plan')
+      expect(tabs().map(label).at(-1)).toBe('Exercises')
+    } finally { useStore.setState({ isGuest }) }
+  })
+
+  it('lights Coach on every chat screen, and Plan for the library’s pages', () => {
+    coachOn()
+    at('/coach'); expect(lit()).toEqual(['Coach'])
+    at('/coach/intake'); expect(lit()).toEqual(['Coach'])
+    at('/library'); expect(lit()).toEqual(['Plan'])
+    at('/muscles'); expect(lit()).toEqual(['Plan'])
+    at('/plan'); expect(lit()).toEqual(['Plan'])
+  })
+
+  it('without the Coach, the library’s pages light Exercises as before', () => {
+    at('/library'); expect(lit()).toEqual(['Exercises'])
+    at('/muscles'); expect(lit()).toEqual(['Exercises'])
+    at('/plan'); expect(lit()).toEqual(['Plan'])
   })
 })

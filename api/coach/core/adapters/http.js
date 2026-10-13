@@ -129,52 +129,84 @@ export function httpAdapter(spec) {
      * native HTTP and a test can hand in a fake.
      */
     async invoke(opts = {}) {
-      const { cfg, prompt, system, schema, env, model, timeoutMs = DEFAULT_TIMEOUT_MS, maxTokens = MAX_OUTPUT_TOKENS, fetch: fetchImpl = globalThis.fetch, signal } = opts;
-      const base = adapter.baseUrl(cfg);
-      if (!base) return { code: -1, text: '', stderr: `no endpoint configured for ${id}`, spawnError: true };
-      const key = keyOf(env);
-      if (!key && !meta.keyOptional) return { code: -1, text: '', stderr: `no API key configured for ${id}`, spawnError: true };
-      const chosen = model || meta.defaultModel;
-      if (!chosen) return { code: 1, text: '', stderr: `no model chosen for ${id} (pick one from the list the endpoint serves)` };
-
-      let body = spec.body({ model: chosen, prompt, system: system || null, schema: schema || null, maxTokens });
-      let retriedWithoutJsonMode = false;
-      let transientRetries = 0;
-      for (;;) {
-        let res;
-        try {
-          res = await call(fetchImpl, endpointUrl(base, spec.path(chosen)), {
-            method: 'POST',
-            headers: { ...extraHeadersFor(id, cfg), 'content-type': 'application/json', ...spec.headers(key) },
-            body: JSON.stringify(body)
-          }, timeoutMs, signal);
-        } catch (e) {
-          if (e.name === 'AbortError') return { code: -1, text: '', stderr: 'timed out', timedOut: true };
-          return { code: 1, text: '', stderr: `could not reach ${hostOf(base)}: ${trim(e.message, 200)}` };
-        }
-        const { data, text } = await readJson(res);
-        if (!res.ok) {
-          const msg = spec.errorMessage(data) || trim(text, 200);
-          if (RETRY_STATUSES.has(res.status) && transientRetries < RETRY_DELAYS_MS.length && !(signal && signal.aborted)) {
-            await sleep(opts.retryDelayMs != null ? opts.retryDelayMs : RETRY_DELAYS_MS[transientRetries], signal);
-            transientRetries++;
-            continue;
-          }
-          // Some OpenAI-compatible servers reject the JSON-mode flag outright. Once, without it.
-          if (res.status === 400 && spec.withoutJsonMode && !retriedWithoutJsonMode && /response_format|json_schema|json_object|json mode|structured/i.test(msg)) {
-            body = spec.withoutJsonMode(body);
-            retriedWithoutJsonMode = true;
-            continue;
-          }
-          return { code: 1, text: '', stderr: `${res.status} ${trim(msg, 280)}` };
-        }
-        let out;
-        try { out = spec.readText(data); } catch (e) { out = { error: `unexpected response shape: ${trim(e.message, 100)}` }; }
-        if (out.error) return { code: 1, text: '', stderr: out.error };
-        if (out.truncated) return { code: 1, text: '', stderr: 'the answer was cut off at the output limit; try a smaller plan or a bigger model' };
-        return { code: 0, text: String(out.text || '').trim(), stderr: '' };
-      }
+      const { prompt, system, schema, preamble, maxTokens = MAX_OUTPUT_TOKENS } = opts;
+      return post(opts, model => spec.body({ model, prompt, system: system || null, schema: schema || null, maxTokens, preamble }), data => {
+        const out = spec.readText(data);
+        return out.error || out.truncated ? out : { text: String(out.text || '').trim() };
+      }, { jsonMode: true });
     }
   };
+
+  /**
+   * The Coach chat's turn: role messages and tool declarations in, text and tool calls out.
+   * Only on a spec that can say both (Chat Completions); the agent speaks a JSON protocol over
+   * plain `invoke` to everything else. `messages` are the agent's neutral turns — { role,
+   * content, calls? } and { role: 'tool', id, name, content } — and the spec puts them on its
+   * own wire. A server that refuses tool declarations answers `toolsUnsupported`, so the agent
+   * can drop to the JSON protocol for the rest of the job instead of failing it.
+   */
+  if (spec.chatBody && spec.readChat) {
+    adapter.nativeTools = true;
+    adapter.invokeChat = async (opts = {}) => {
+      const { system, messages, tools, final, preamble, maxTokens = MAX_OUTPUT_TOKENS } = opts;
+      return post(opts, model => spec.chatBody({ model, system: system || null, messages: messages || [], tools: tools || [], final: !!final, maxTokens, preamble }), data => {
+        const out = spec.readChat(data);
+        return out.error || out.truncated ? out : { text: String(out.text || '').trim(), calls: out.calls || [] };
+      }, { tools: true });
+    };
+  }
+
+  /** The POST every answer travels over: auth, retries on transient statuses, the JSON-mode
+   *  fallback, and the mapping onto { code, text, stderr }. `read` turns a 2xx body into
+   *  { text, calls? } or { error } / { truncated }. */
+  async function post(opts, bodyFor, read, { jsonMode = false, tools = false } = {}) {
+    const { cfg, env, model, timeoutMs = DEFAULT_TIMEOUT_MS, fetch: fetchImpl = globalThis.fetch, signal } = opts;
+    const base = adapter.baseUrl(cfg);
+    if (!base) return { code: -1, text: '', stderr: `no endpoint configured for ${id}`, spawnError: true };
+    const key = keyOf(env);
+    if (!key && !meta.keyOptional) return { code: -1, text: '', stderr: `no API key configured for ${id}`, spawnError: true };
+    const chosen = model || meta.defaultModel;
+    if (!chosen) return { code: 1, text: '', stderr: `no model chosen for ${id} (pick one from the list the endpoint serves)` };
+
+    let body = bodyFor(chosen);
+    let retriedWithoutJsonMode = false;
+    let transientRetries = 0;
+    for (;;) {
+      let res;
+      try {
+        res = await call(fetchImpl, endpointUrl(base, spec.path(chosen)), {
+          method: 'POST',
+          headers: { ...extraHeadersFor(id, cfg), 'content-type': 'application/json', ...spec.headers(key) },
+          body: JSON.stringify(body)
+        }, timeoutMs, signal);
+      } catch (e) {
+        if (e.name === 'AbortError') return { code: -1, text: '', stderr: 'timed out', timedOut: true };
+        return { code: 1, text: '', stderr: `could not reach ${hostOf(base)}: ${trim(e.message, 200)}` };
+      }
+      const { data, text } = await readJson(res);
+      if (!res.ok) {
+        const msg = spec.errorMessage(data) || trim(text, 200);
+        if (RETRY_STATUSES.has(res.status) && transientRetries < RETRY_DELAYS_MS.length && !(signal && signal.aborted)) {
+          await sleep(opts.retryDelayMs != null ? opts.retryDelayMs : RETRY_DELAYS_MS[transientRetries], signal);
+          transientRetries++;
+          continue;
+        }
+        // Some OpenAI-compatible servers reject the JSON-mode flag outright. Once, without it.
+        if (jsonMode && res.status === 400 && spec.withoutJsonMode && !retriedWithoutJsonMode && /response_format|json_schema|json_object|json mode|structured/i.test(msg)) {
+          body = spec.withoutJsonMode(body);
+          retriedWithoutJsonMode = true;
+          continue;
+        }
+        // Ollama answers a model without tool support with a 400 that says so.
+        const toolsUnsupported = tools && res.status === 400 && /tool|function/i.test(msg);
+        return { code: 1, text: '', stderr: `${res.status} ${trim(msg, 280)}`, ...(toolsUnsupported ? { toolsUnsupported: true } : {}) };
+      }
+      let out;
+      try { out = read(data); } catch (e) { out = { error: `unexpected response shape: ${trim(e.message, 100)}` }; }
+      if (out.error) return { code: 1, text: '', stderr: out.error };
+      if (out.truncated) return { code: 1, text: '', stderr: 'the answer was cut off at the output limit; try a smaller plan or a bigger model' };
+      return { code: 0, text: out.text, ...(out.calls ? { calls: out.calls } : {}), stderr: '' };
+    }
+  }
   return adapter;
 }

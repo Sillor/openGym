@@ -3,7 +3,7 @@ import {
   canonicalPlan, planHash, hashPlan, markStale, applicable, currentValue, ROUTINE_NAME_SEEN,
   pushSnapshot, revertLast, canRevert, appendLog, applyChangeSet, applyCreatedPlan,
   recordDismissal, validateProposal, coachAvailable, hasConsent,
-  recordDebrief, logEntry, lightBundle, changeValues,
+  recordDebrief, logEntry, lightBundle, changeValues, clearCoachChat, appendChat,
   CHANGE_TYPES, SNAPSHOT_MAX, LOG_MAX, CONSENT_VERSION
 } from './coach.js'
 import { registerCustom } from './exercises.js'
@@ -722,6 +722,26 @@ describe('what the log keeps, so a decision never makes a proposal vanish', () =
     expect(dismissed.nutrition.customKcal).toBeUndefined()
     expect(dismissed.coach.log.at(-1).decisions.every(d => d.status === 'rejected')).toBe(true)
     expect(dismissed.foodLog).toEqual(food)
+  })
+
+  it('clearCoachChat empties the thread, stamps chatClearedAt, and keeps profile, consent and undo', () => {
+    const s = state()
+    s.coach.profile = { goal: 'muscle' }
+    s.coach.chat = [{ id: 'm1', kind: 'text', at: 10 }]
+    s.coach.log = [{ id: 'l1' }]
+    s.coach.snapshots = [{ proposalId: 'p1' }]
+    clearCoachChat(s, 50)
+    expect(s.coach.chat).toEqual([])
+    expect(s.coach.chatClearedAt).toBe(50)
+    expect(s.coach.profile.goal).toBe('muscle')
+    expect(s.coach.consent.version).toBe(CONSENT_VERSION)
+    expect(s.coach.log).toHaveLength(1)
+    expect(s.coach.snapshots).toHaveLength(1)
+    appendChat(s, { kind: 'text', at: 40, role: 'user', text: 'old' })
+    // The merge, not appendChat, is what drops a resurrected line — the stamp is what it reads.
+    expect(s.coach.chat).toHaveLength(1)
+    clearCoachChat(s, 20)
+    expect(s.coach.chatClearedAt).toBe(50)   // never moves backwards
   })
 
   it('lightBundle drops what the card does not show', () => {

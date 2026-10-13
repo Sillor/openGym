@@ -3,6 +3,9 @@ import { useStore } from '../store/useStore.js'
 import { effectiveRoutineIds, effectiveRoutines } from '../lib/history.js'
 import { todayISO } from '../lib/format.js'
 import { t } from '../lib/i18n.js'
+import { coachAvailable } from '../lib/coach.js'
+import { DEMO } from '../lib/demo.js'
+import { MOBILE } from '../lib/mobile.js'
 import Icon from './Icon.jsx'
 import Elapsed from './Elapsed.jsx'
 import { useConnectionTrouble } from './SyncBanner.jsx'
@@ -19,18 +22,31 @@ function Tab({ active, icon, label, onClick, dot }) {
   )
 }
 
+/* Where the Coach is available it takes the last tab, and the exercise library moves into Plan
+   (its Exercises view, views/Plan.jsx). The same predicate as every other Coach entry point, so
+   an instance without the feature keeps the Exercises tab exactly as it was. */
+export function useCoachTab() {
+  const config = useStore(s => s.config)
+  const user = useStore(s => s.user)
+  const coachMode = useStore(s => s.coachLocal?.mode)
+  return coachAvailable(config, user, { demo: DEMO, mobile: MOBILE, coachMode })
+}
+
 export default function TabBar({ onStart }) {
   const nav = useNavigate()
   const loc = useLocation()
   const S = useStore(s => s.S)
   const user = useStore(s => s.user)
   const isGuest = useStore(s => s.isGuest())
+  const coach = useCoachTab()
   // With the connection banner switched off, a sync problem shows as a dot on Home, the tab
   // Settings lives under (#369, #330).
   const trouble = useConnectionTrouble()
   if (!user && !isGuest) return null
   const cur = loc.pathname.split('/')[1] || 'home'
-  const on = k => cur === k || (cur === 'history' && k === 'stats') || (cur === 'settings' && k === 'home') || (cur === 'muscles' && k === 'library') || (cur === 'structural-balance' && k === 'stats')
+  // The library's pages light up whichever tab holds the library: its own, or Plan's.
+  const lib = coach ? 'plan' : 'library'
+  const on = k => cur === k || (cur === 'history' && k === 'stats') || (cur === 'settings' && k === 'home') || ((cur === 'library' || cur === 'muscles') && k === lib) || (cur === 'structural-balance' && k === 'stats')
 
   const running = !!S.active && cur !== 'workout' && !S.active.editingWorkoutId && !S.active.backfill && S.active.start > 0
   const startWorkout = () => {
@@ -60,7 +76,9 @@ export default function TabBar({ onStart }) {
           : <span>{S.active ? (cur === 'workout' ? t('Workout') : S.active.editingWorkoutId ? t('Edit workout') : t('Resume')) : t('Start')}</span>}
       </button>
       <Tab active={on('stats')} icon="chart" label={t('Stats')} onClick={() => nav('/stats')} />
-      <Tab active={on('library')} icon="dumbbell" label={t('Exercises')} onClick={() => nav('/library')} />
+      {coach
+        ? <Tab active={on('coach')} icon="sparkles" label={t('Coach')} onClick={() => nav('/coach')} />
+        : <Tab active={on('library')} icon="dumbbell" label={t('Exercises')} onClick={() => nav('/library')} />}
     </nav>
   )
 }

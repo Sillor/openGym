@@ -168,7 +168,7 @@ test('the browser parser stays in lockstep with the API parser', () => {
   const text = '```json\n{"name":"Egg","calories":70.6,"protein":6.24,"carbs":0.5,"fat":5,"serving_size_grams":50}\n```';
   assert.deepEqual(parseFoodAnalysis(text), {
     ok: true,
-    items: [{ name: 'Egg', kcal: 71, protein: 6.2, carbs: 0.5, fat: 5, grams: 50 }]
+    items: [{ name: 'Egg', kcal: 71, protein: 6.2, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving' }]
   });
   assert.deepEqual(parseFoodAnalysis('nope'), { ok: false });
 });
@@ -188,7 +188,7 @@ test('analyze uses the coach key, retries a short answer once, and does not stor
     fetchImpl: seen
   });
   assert.equal(out.status, 200);
-  assert.deepEqual(out.body, { ok: true, items: [{ name: 'Egg', kcal: 70, protein: 6, carbs: 0.5, fat: 5, grams: 50 }] });
+  assert.deepEqual(out.body, { ok: true, items: [{ name: 'Egg', kcal: 70, protein: 6, carbs: 0.5, fat: 5, grams: 50, servingQty: 1, servingUnit: 'serving' }] });
   const sent = seen.calls[0];
   assert.equal(sent.url, 'https://api.openai.com/v1/chat/completions');
   assert.equal(sent.headers.authorization, 'Bearer sk-test');

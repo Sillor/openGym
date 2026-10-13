@@ -2,8 +2,8 @@
 // Plan → Schedule → This week (v1.3.11): one row per weekday, whatever is on it. #276 had moved
 // "add a second routine" into a small ＋ in a planned day's header; the day's own picker now does
 // all of it (one routine, several for a combined day, or a rest day), so every day is one
-// tappable row that opens it, planned or not. The Coach, once a banner over the week, is the
-// last entry of the Plan menu.
+// tappable row that opens it, planned or not. The Coach, once a banner over the week and then the
+// last entry of the Plan menu, has a tab of its own now.
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -92,20 +92,15 @@ describe('Plan — the menu', () => {
     return menuSheet.mock.calls.at(-1)[0]
   }
 
-  it('has no Coach banner on the page; the Coach is the menu’s last entry when it is available', () => {
-    mocks.coach = true
-    mount()
-    expect(host.textContent).not.toContain('Plan design and reviews')
-    const menu = openMenu()
-    const coach = menu.items.filter(Boolean).at(-1)
-    expect(coach.label).toBe('Coach')
-    act(() => coach.onClick())
-    expect(mocks.nav).toHaveBeenCalledWith('/coach')
-  })
-
-  it('leaves the Coach out where it is not available', () => {
-    mount()
-    expect(openMenu().items.filter(Boolean).map(i => i.label)).not.toContain('Coach')
+  // The Coach was the menu's last entry until it got a tab of its own (components/TabBar.jsx),
+  // shown on exactly the same condition; now neither the page nor the menu has it.
+  it('has no Coach on the page or in the menu, available or not', () => {
+    for (const available of [true, false]) {
+      mocks.coach = available
+      mount()
+      expect(host.textContent).not.toContain('Plan design and reviews')
+      expect(openMenu().items.filter(Boolean).map(i => i.label)).toEqual(['Export plan file', 'Print / Save as PDF', 'Import a plan file', 'Load starter plan'])
+    }
   })
 
   it('greys out share and print while there is nothing to share, and says why', () => {

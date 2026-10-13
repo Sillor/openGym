@@ -2,15 +2,20 @@
 //
 // openGym's own file is a flat list of the meals already on S.foodLog, filtered by the local
 // day stored on each entry (`d`, YYYY-MM-DD) — not by re-reading `t` in some other zone.
-// JSON may carry media hash refs; it never carries photo bytes. CSV leaves the hashes out.
+// JSON may carry media hash refs and, when a meal has them, its ingredients, plus the
+// meal serving (servingQty, servingUnit) and each ingredient amount (qty, unit). It never
+// carries photo bytes. CSV leaves the hashes, the ingredient lines, and those amounts out.
 //
 // The CSV time column is `new Date(t).toISOString()`: a UTC timestamp with a trailing Z
 // (for example 2026-08-05T16:00:00.000Z), not the device's local wall clock. The date column
 // stays the local day `d`. Writing the UTC instant keeps the file identical in every timezone.
 //
 // A Fud AI export nests days → meals → items, with protein_g / quantity_g and format_version
-// "1.5". Photos in that file are filenames on the phone that wrote it, so they are dropped and
-// every meal comes in as source "manual". This only parses; the screen confirms before writing.
+// "1.5". An item's ingredients use those same names (quantity_g, calories, protein_g,
+// carbs_g, fat_g) and go through cleanMeal, so junk rows drop and the meal totals follow
+// the list. Photos in that file are filenames on the phone that wrote it, so they are
+// dropped and every meal comes in as source "manual". This only parses; the screen
+// confirms before writing.
 
 import { todayISO, uid } from './format.js'
 import { cleanMeal } from './nutrition.js'
@@ -50,9 +55,26 @@ function cleanValue(v) {
   return v
 }
 
+const INGREDIENT_KEYS = ['name', 'kcal', 'protein', 'carbs', 'fat', 'grams', 'qty', 'unit']
+
+function copyIngredients(raw) {
+  if (!Array.isArray(raw) || !raw.length) return undefined
+  const out = []
+  for (const row of raw) {
+    const cleaned = cleanValue(row)
+    if (!cleaned || typeof cleaned !== 'object' || Array.isArray(cleaned)) continue
+    const item = {}
+    for (const key of INGREDIENT_KEYS) {
+      if (cleaned[key] !== undefined) item[key] = cleaned[key]
+    }
+    if (Object.keys(item).length) out.push(item)
+  }
+  return out.length ? out : undefined
+}
+
 function copyEntry(e) {
   const media = cleanValue(Array.isArray(e.media) ? e.media : [])
-  return {
+  const entry = {
     id: e.id,
     d: e.d,
     t: e.t,
@@ -68,6 +90,11 @@ function copyEntry(e) {
     media: (Array.isArray(media) ? media : []).filter(m => m && typeof m === 'object' && !Array.isArray(m) && Object.keys(m).length),
     edited: !!e.edited,
   }
+  if (e.servingQty != null && e.servingQty !== '') entry.servingQty = e.servingQty
+  if (e.servingUnit != null && e.servingUnit !== '') entry.servingUnit = e.servingUnit
+  const ingredients = copyIngredients(e.ingredients)
+  if (ingredients) entry.ingredients = ingredients
+  return entry
 }
 
 /**
@@ -130,6 +157,22 @@ function mealOf(type) {
   return MEAL_OF[String(type || '').trim().toLowerCase()] || 'snack'
 }
 
+/** Fud ingredient rows use quantity_g / calories / protein_g / carbs_g / fat_g. Photo fields are not copied. */
+function fudIngredients(raw) {
+  if (!Array.isArray(raw)) return undefined
+  return raw.map(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+    return {
+      name: row.name,
+      kcal: row.calories,
+      protein: row.protein_g,
+      carbs: row.carbs_g,
+      fat: row.fat_g,
+      grams: row.quantity_g,
+    }
+  })
+}
+
 /** Local instant for a diary day plus "HH:mm" (or "HH:mm:ss"). Null when either is unusable. */
 function atLocal(date, time) {
   if (!DAY.test(date || '')) return null
@@ -150,6 +193,7 @@ function fail(error) {
 /**
  * Parse a Fud AI food diary (format_version 1.5) into food-log entries ready to append.
  * `id` supplies each new id (default `uid`). Photo filenames and any base64 are ignored.
+ * Ingredients, when the item has them, are mapped through cleanMeal.
  */
 export function importFudDiary(json, id = uid) {
   const doc = readJson(json)
@@ -170,6 +214,7 @@ export function importFudDiary(json, id = uid) {
         if (!item || typeof item !== 'object') continue
         const t = atLocal(day.date, item.time)
         if (t == null) continue
+        const ingredients = fudIngredients(item.ingredients)
         const row = cleanMeal({
           id: next(),
           d: day.date,
@@ -185,6 +230,7 @@ export function importFudDiary(json, id = uid) {
           note: typeof item.note === 'string' ? item.note : '',
           media: [],
           edited: false,
+          ...(ingredients ? { ingredients } : {}),
         }, { source: 'manual' })
         if (row) entries.push(row)
       }

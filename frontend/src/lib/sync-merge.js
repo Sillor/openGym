@@ -32,6 +32,8 @@
  *   - foodLog: union by id; of an id that both have, the entry edited last by its own `t`
  *     (stampChange), the newer copy's on a tie. Many meals a day, so not one-per-day like a weigh-in
  *   - favEx: ordered set union, the newer copy first
+ *   - coach: whole, like a setting; then its chat lines from before the later `chatClearedAt` of
+ *     the two copies are dropped (keepChatCleared)
  *   - exWeights: union by exercise, the better `w` for that exercise — larger for an ordinary
  *     lift, smaller on an assistance machine (a PR logged on the other device must not be
  *     forgotten, whichever way it runs). An exercise in a workout whose edited version was kept
@@ -727,6 +729,17 @@ function applyEdits(out, n, o) {
   return bumps
 }
 
+// A cleared Coach chat stays cleared (clearCoachChat, lib/coach.js). `coach` is one stamped
+// field, taken whole from the copy that changed it last — and a device that never saw the clear
+// but has written one line since changed it last, bringing every cleared line back with it. The
+// later clear of the two holds, and only the lines written after it are kept.
+function keepChatCleared(out, a, b) {
+  const at = Math.max(Number(a?.coach?.chatClearedAt) || 0, Number(b?.coach?.chatClearedAt) || 0)
+  if (!at || !isMap(out.coach)) return
+  out.coach.chatClearedAt = at
+  if (Array.isArray(out.coach.chat)) out.coach.chat = out.coach.chat.filter(m => (Number(m?.at) || 0) > at)
+}
+
 // `prefer` names the side whose settings, plan and per-exercise config win regardless of `_ts`:
 // on sign-in the server's profile is the truth and the device only contributes the entries it
 // logged while signed out. Without it the newer copy decides, as for a conflict between devices.
@@ -884,6 +897,7 @@ export function mergeStates(a0, b0, { prefer } = {}) {
     if (Object.keys(undone).length) out.undone = undone; else delete out.undone
   }
   if (deleted) out.deleted = deleted; else delete out.deleted
+  keepChatCleared(out, a, b)
   out._ts = Math.max(a._ts || 0, b._ts || 0)
   if (resetAt) out.resetAt = resetAt
   if (resetIds) out.resetIds = resetIds

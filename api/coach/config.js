@@ -81,7 +81,7 @@ const DEFAULTS = {
   models: {},                                        // { [provider]: model id }
   providerOptions: {},                               // { [provider]: { baseUrl } }
   boundUid: {},                                      // instance mode: { [provider]: the profile its credential bound to }
-  caps: { perProfileDaily: 10, instanceDaily: 0 },   // 0 = unlimited
+  caps: { perProfileDaily: 10, instanceDaily: 0, chatDaily: 200 },   // 0 = unlimited
   daily: null,                                       // { date, count }: jobs enqueued today across every profile
   // Anonymous medians across profiles that opt in ("compare with others"). Off by default: it
   // is the one feature where one person's numbers feed into what another person sees.
@@ -361,4 +361,4 @@ export function logJob(entry) {
   save({ log });
 }
 export const lastError = () => [...(load().log || [])].reverse().find(e => e.outcome === 'failed') || null;
-export const lastSuccess = () => [...(load().log || [])].reverse().find(e => e.outcome === 'ready' || e.outcome === 'nochange') || null;
+export const lastSuccess = () => [...(load().log || [])].reverse().find(e => e.outcome === 'ready' || e.outcome === 'nochange' || e.outcome === 'chat') || null;

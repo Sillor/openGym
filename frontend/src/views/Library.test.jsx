@@ -154,6 +154,22 @@ describe('Library header count', () => {
     expect(cssSource).toMatch(/^\.hdr\.lib-hdr\{[^}]*flex-wrap:wrap/m)
   })
 
+  // Embedded in Plan → Exercises (where the Coach has the library's tab), Plan's header is the
+  // page's: no second title, the count and "By muscle" on one bar above the search.
+  it('drops its own title when embedded, and keeps the count and "By muscle"', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    mounted.push(root)
+    act(() => root.render(<Library embedded />))
+    expect(host.querySelector('h1')).toBeNull()
+    expect(host.querySelector('.hdr')).toBeNull()
+    expect(host.querySelector('.lib-bar .lib-count').textContent).toBe(`${EXDB.length} exercises with animations`)
+    expect(host.querySelector('.lib-bar .btn').textContent).toContain('By muscle')
+    expect(host.querySelector('.search input')).not.toBeNull()
+    expect(render().querySelector('.hdr h1').textContent).toBe('Exercises')
+  })
+
   it('lets the subtitle wrap on narrow phones so nothing is cut at 320 px', () => {
     const narrow = cssSource.match(/@media \(max-width:360px\)\{\.hdr\.lib-hdr>\.sub\.lib-count\{([^}]*)\}\}/)?.[1] || ''
     expect(narrow).toContain('white-space:normal')

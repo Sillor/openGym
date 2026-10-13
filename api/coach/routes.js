@@ -106,6 +106,19 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
       } catch (e) { failEnqueue(res, e); }
     },
 
+    // One chat turn. The message is this turn; earlier lines are read from S.coach.chat, not
+    // from the body, so two devices cannot disagree about what was said.
+    'POST /api/coach/chat': async (req, res) => {
+      const user = guard(req, res); if (!user) return;
+      const body = await readBody(req);
+      const message = body.message != null ? String(body.message).slice(0, cfgStore.MAX_MESSAGE_LEN_CEILING) : '';
+      if (!message.trim()) return json(res, 400, { error: 'message is required' });
+      try {
+        const job = jobs.enqueue(user.id, { kind: 'chat', lang: body.lang, note: message });
+        json(res, 202, { job });
+      } catch (e) { failEnqueue(res, e); }
+    },
+
     /* How this profile sits against everyone else on the instance who opted in: medians only,
        at least three people, and nothing for a profile that does not share itself. */
     'GET /api/coach/cohort': async (req, res) => {
@@ -245,7 +258,10 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
       if (body.caps) {
         patch.caps = {
           perProfileDaily: Math.max(0, Math.min(200, +body.caps.perProfileDaily || 0)),
-          instanceDaily: Math.max(0, Math.min(5000, +body.caps.instanceDaily || 0))
+          instanceDaily: Math.max(0, Math.min(5000, +body.caps.instanceDaily || 0)),
+          chatDaily: body.caps.chatDaily !== undefined
+            ? Math.max(0, Math.min(2000, +body.caps.chatDaily || 0))
+            : (current.caps.chatDaily ?? 200)
         };
       }
       if (body.maxMessageLen !== undefined) {

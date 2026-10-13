@@ -6,11 +6,13 @@ import CoachChat from './CoachChat.jsx'
 import { CONSENT_VERSION } from '../lib/coach.js'   // the consent a fixture grants is the current one, whatever its number
 import { effectiveRoutine } from '../lib/history.js'
 import { todayISO } from '../lib/format.js'
+import { sendChat, resolvePending } from '../lib/coach-api.js'
+import { confirmSheet } from '../sheets.jsx'
 
 // The chat is where a plan is imported. These pin that the Import button applies the pending
 // plan through the store, writes the decision into the thread, and leaves today startable.
 const mocks = vi.hoisted(() => {
-  const state = { S: null, pending: null, job: null, community: false, maxMessageLen: 2200, nav: vi.fn(), toast: vi.fn(), openSheet: vi.fn(), refresh: vi.fn() }
+  const state = { S: null, pending: null, job: null, last: null, community: false, maxMessageLen: 2200, nav: vi.fn(), toast: vi.fn(), openSheet: vi.fn(), refresh: vi.fn() }
   state.storeSnapshot = () => ({
     S: state.S,
     user: { id: 'u1' },
@@ -35,9 +37,10 @@ vi.mock('../store/useUI.js', () => {
 })
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.nav }))
 vi.mock('../lib/coach-api.js', () => ({
-  useCoachStatus: () => ({ pending: mocks.pending, job: mocks.job, cap: null, loading: false, lastError: null, last: null, refresh: mocks.refresh, maxMessageLen: mocks.maxMessageLen }),
+  useCoachStatus: () => ({ pending: mocks.pending, job: mocks.job, cap: null, loading: false, lastError: null, last: mocks.last, refresh: mocks.refresh, maxMessageLen: mocks.maxMessageLen }),
   resolvePending: vi.fn(() => Promise.resolve({})),
   refinePlan: vi.fn(() => Promise.resolve({})),
+  sendChat: vi.fn(() => Promise.resolve({})),
   requestReview: vi.fn(() => Promise.resolve({})),
   requestDebrief: vi.fn(() => Promise.resolve({})),
   cohortStats: vi.fn(() => Promise.resolve({ ok: false, enabled: true, sharing: false })),
@@ -89,10 +92,11 @@ function installDom() {
   root = createRoot(container)
 }
 
-async function mount(pending, job = null, { community = false, S = state() } = {}) {
+async function mount(pending, job = null, { community = false, S = state(), last = null } = {}) {
   mocks.S = S
   mocks.pending = pending
   mocks.job = job
+  mocks.last = last
   mocks.community = community
   installDom()
   await act(async () => { root.render(React.createElement(CoachChat)) })
@@ -225,10 +229,13 @@ describe('the Coach chat', () => {
 
   it('offers the quick actions only when nothing is running', async () => {
     await mount(null)
-    expect(byText(/Review my training/)).toBeTruthy()
+    expect(byText(/Review my last week/)).toBeTruthy()
+    expect(byText(/Build me a 3-day routine/)).toBeTruthy()
+    expect(byText(/How is my protein\?/)).toBeTruthy()
+    expect(byText(/Swap an exercise/)).toBeTruthy()
     expect(byText(/Last workout/)).toBeFalsy()          // no workout logged yet
     await mount(null, { id: 'j1', kind: 'review', state: 'running', startedAt: Date.now() })
-    expect(byText(/Review my training/)).toBeFalsy()
+    expect(byText(/Review my last week/)).toBeFalsy()
   })
 
   it('offers the comparison only when the instance allows it', async () => {
@@ -236,5 +243,107 @@ describe('the Coach chat', () => {
     expect(byText(/^Compare$/)).toBeFalsy()
     await mount(null, null, { community: true })
     expect(byText(/^Compare$/)).toBeTruthy()
+  })
+
+  it('stays on /coach when consent is given but the profile is missing', async () => {
+    const S = state()
+    S.coach.profile = null
+    await mount(null, null, { S })
+    expect(mocks.nav).not.toHaveBeenCalled()
+    expect(container.querySelector('.composer')).toBeTruthy()
+  })
+
+  it('a suggestion chip sends that line as a chat turn', async () => {
+    await mount(null)
+    await click(byText(/How is my protein\?/))
+    await act(async () => { await Promise.resolve() })
+    expect(sendChat).toHaveBeenCalledWith('How is my protein?')
+  })
+
+  it('shows the current job.step on the typing bubble', async () => {
+    await mount(null, { id: 'j1', kind: 'chat', state: 'running', startedAt: Date.now(), step: 'Reading your workout history' })
+    expect(container.textContent).toContain('Reading your workout history')
+  })
+
+  it('appends a finished chat reply once, with its informational cards', async () => {
+    const last = {
+      outcome: 'chat', id: 'j1', jobId: 'j1', at: Date.now(),
+      reply: 'Here are a few options.',
+      cards: [{ id: 'e1', type: 'exercises', ids: ['0001', '0002'], note: 'Same muscles.' }]
+    }
+    await mount(null, { id: 'j1', kind: 'chat', state: 'running', startedAt: Date.now() }, { last })
+    mocks.job = null
+    await act(async () => { root.render(React.createElement(CoachChat)) })
+    expect(mocks.S.coach.chat.filter(m => m.kind === 'chat')).toHaveLength(1)
+    expect(mocks.S.coach.chat.at(-1)).toMatchObject({ kind: 'chat', role: 'coach', jobId: 'j1', text: 'Here are a few options.' })
+    expect(mocks.S.coach.chat.at(-1).cards[0].type).toBe('exercises')
+    await act(async () => { root.render(React.createElement(CoachChat)) })
+    expect(container.textContent).toContain('Same muscles.')
+  })
+
+  it('Confirm on a chat change card applies it and leaves a receipt; Not now dismisses', async () => {
+    const pending = {
+      kind: 'chat', jobId: 'j1', createdAt: Date.now(),
+      cards: [{ id: 'c1', type: 'changes', title: 'Add Legs', changes: [
+        { id: 'b', type: 'add-routine', target: {}, before: null, after: { name: 'Legs', ex: [{ id: '0001', sets: 3, reps: 10 }] }, why: 'legs' }
+      ] }]
+    }
+    await mount(pending)
+    expect(container.textContent).toContain('Add Legs')
+    await click(byText(/Apply 1 change/))
+    expect(mocks.S.routines.map(r => r.name)).toEqual(['Legs'])
+    expect(mocks.S.coach.chat.at(-1)).toMatchObject({ kind: 'applied', jobId: 'j1', cardId: 'c1' })
+    expect(resolvePending).toHaveBeenCalledWith({ accepted: ['c1'] })
+    mocks.pending = null
+    await act(async () => { root.render(React.createElement(CoachChat)) })
+    expect(container.querySelector('.receipt')).toBeTruthy()
+    expect(container.textContent).toMatch(/Applied/)
+  })
+
+  it('Not now on a chat card records a dismissal and a Declined receipt', async () => {
+    const pending = {
+      kind: 'chat', jobId: 'j1', createdAt: Date.now(),
+      cards: [{ id: 'c1', type: 'changes', title: 'Add Legs', changes: [
+        { id: 'b', type: 'add-routine', target: {}, before: null, after: { name: 'Legs', ex: [{ id: '0001', sets: 3, reps: 10 }] }, why: 'legs' }
+      ] }]
+    }
+    await mount(pending)
+    await click(byText(/^Not now$/))
+    expect(mocks.S.coach.chat.at(-1)).toMatchObject({ kind: 'dismissed', jobId: 'j1', cardId: 'c1' })
+    expect(resolvePending).toHaveBeenCalledWith({ dismissed: true })
+    mocks.pending = null
+    await act(async () => { root.render(React.createElement(CoachChat)) })
+    expect(container.querySelector('.receipt.no')).toBeTruthy()
+  })
+
+  it('a newer chat reply greys an older pending as Outdated', async () => {
+    const S = state()
+    S.coach.chat.push({ id: 'm2', role: 'coach', kind: 'chat', jobId: 'newer', text: 'Later.', at: 9 })
+    await mount({
+      kind: 'chat', jobId: 'old', createdAt: 1,
+      cards: [{ id: 'c1', type: 'changes', title: 'Old swap', changes: [
+        { id: 'b', type: 'add-routine', target: {}, before: null, after: { name: 'Legs', ex: [{ id: '0001', sets: 3, reps: 10 }] }, why: 'legs' }
+      ] }]
+    }, null, { S })
+    expect(container.textContent).toContain('Outdated')
+    expect(byText(/Apply 1 change/)).toBeFalsy()
+  })
+
+  it('Clear chat from the header menu empties the thread after confirm', async () => {
+    vi.mocked(confirmSheet).mockImplementation(opts => opts.onConfirm?.())
+    const S = state()
+    S.coach.chat.push({ id: 'm2', role: 'user', kind: 'text', text: 'hi', at: 2 })
+    await mount(null, null, { S })
+    await click(container.querySelector('[aria-label="More"]'))
+    const renderMenu = mocks.openSheet.mock.calls[0][0]
+    const wrap = document.createElement('div')
+    container.appendChild(wrap)
+    const menuRoot = createRoot(wrap)
+    await act(async () => { menuRoot.render(renderMenu(() => {})) })
+    await click([...wrap.querySelectorAll('button, .lrow')].find(b => /Clear chat/.test(b.textContent || '')))
+    expect(mocks.S.coach.chat).toEqual([])
+    expect(mocks.S.coach.chatClearedAt).toBeGreaterThan(0)
+    await act(async () => { menuRoot.unmount() })
+    vi.mocked(confirmSheet).mockReset()
   })
 })

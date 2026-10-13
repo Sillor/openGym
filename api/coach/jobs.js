@@ -20,6 +20,8 @@ import * as cfgStore from './config.js';
 import { adapterFor } from './adapters/index.js';
 import * as payloadLib from './core/payload.js';
 import { runPipeline } from './core/pipeline.js';
+import { runChat } from './core/agent.js';
+import { isActionable } from './core/tools.js';
 import { extractJSON } from './core/parse.js';
 import { hashPlan } from './core/plan-hash.js';
 import { buildPrompt } from './core/prompt.js';
@@ -108,18 +110,26 @@ export function readState(uid) {
 /* ---------- caps ---------- */
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
-function bumpDaily(uid) {
+function bumpDaily(uid, kind) {
   const rec = readUser(uid);
   const d = todayISO();
-  const daily = rec.daily?.date === d ? { date: d, count: rec.daily.count + 1 } : { date: d, count: 1 };
+  const prev = rec.daily?.date === d ? rec.daily : { date: d, count: 0, chat: 0 };
+  const daily = kind === 'chat'
+    ? { date: d, count: prev.count || 0, chat: (prev.chat || 0) + 1 }
+    : { date: d, count: (prev.count || 0) + 1, chat: prev.chat || 0 };
   patchUser(uid, { daily });
-  return daily.count;
+  return daily;
 }
 export function capState(uid) {
   const caps = cfgStore.load().caps || {};
   const rec = readUser(uid);
-  const used = rec.daily?.date === todayISO() ? rec.daily.count : 0;
-  return { used, limit: caps.perProfileDaily || 0 };
+  const today = rec.daily?.date === todayISO();
+  return {
+    used: today ? rec.daily.count : 0,
+    limit: caps.perProfileDaily || 0,
+    chatUsed: today ? (rec.daily.chat || 0) : 0,
+    chatLimit: caps.chatDaily || 0
+  };
 }
 // The instance-wide count is kept the same way in coach.json, not read off the job log: the
 // log keeps its last hundred entries, and a count that stops at a hundred is not a cap.
@@ -145,7 +155,10 @@ export function status(uid) {
     return { job: null, pending: null, cap: capState(uid) };
   }
   return {
-    job: rec.current ? { id: rec.current.id, kind: rec.current.kind, state: rec.current.state, startedAt: rec.current.startedAt } : null,
+    job: rec.current ? {
+      id: rec.current.id, kind: rec.current.kind, state: rec.current.state, startedAt: rec.current.startedAt,
+      ...(rec.current.step ? { step: rec.current.step } : {})
+    } : null,
     pending: rec.pending || null,
     cap: capState(uid),
     // How the most recent job ended, so the chat can say "nothing to change" or "that failed"
@@ -155,7 +168,11 @@ export function status(uid) {
 }
 function lastOutcome(rec) {
   const h = (rec.history || []).at(-1);
-  return h ? { id: h.id, kind: h.kind, outcome: h.outcome, errorClass: h.errorClass || null, at: h.at, ...(h.reading ? { reading: h.reading } : {}) } : null;
+  if (!h) return null;
+  if (h.outcome === 'chat') {
+    return { outcome: 'chat', jobId: h.id, at: h.at, reply: h.reply || '', cards: Array.isArray(h.cards) ? h.cards : [] };
+  }
+  return { id: h.id, kind: h.kind, outcome: h.outcome, errorClass: h.errorClass || null, at: h.at, ...(h.reading ? { reading: h.reading } : {}) };
 }
 function archive(uid, rec, outcome) {
   const history = [...(rec.history || []), {
@@ -225,21 +242,25 @@ export function enqueue(uid, opts) {
   }
 
   const caps = cfgStore.load().caps || {};
-  const { used, limit } = capState(uid);
-  if (limit > 0 && used >= limit) throw new CoachError('cap', 'daily limit reached');
+  const { used, limit, chatUsed, chatLimit } = capState(uid);
+  if (opts.kind === 'chat') {
+    if (chatLimit > 0 && chatUsed >= chatLimit) throw new CoachError('cap', 'daily limit reached');
+  } else if (limit > 0 && used >= limit) {
+    throw new CoachError('cap', 'daily limit reached');
+  }
   if (caps.instanceDaily > 0 && instanceUsedToday() >= caps.instanceDaily) throw new CoachError('cap', 'this instance has reached its daily limit');
 
   // Counted at enqueue, not at completion: the cap exists to bound what one profile can spend
   // of the owner's provider account, and queueing twenty jobs spends it whether or not the
-  // twentieth ever finishes.
-  bumpDaily(uid);
+  // twentieth ever finishes. Chat has its own daily counter, separate from plan/review/debrief.
+  bumpDaily(uid, opts.kind);
   bumpInstanceDaily();
 
   const job = {
     id: crypto.randomBytes(8).toString('hex'),
     uid,
     forgetSeq: forgetSeq.get(uid) || 0,
-    kind: opts.kind,                                  // 'create' | 'review' | 'debrief'
+    kind: opts.kind,                                  // 'create' | 'review' | 'debrief' | 'chat'
     trigger: opts.trigger || 'manual',                // 'manual' | 'scheduled'
     workoutId: opts.workoutId ? String(opts.workoutId).slice(0, 40) : null,
     intake: opts.intake || null,
@@ -292,7 +313,8 @@ function finish(job, result) {
     // leaves the user with a job that finished and nothing to show for it. It lives here, in
     // the profile's own file — deliberately not in `detail`, which goes to the instance log
     // the admin card renders, and which carries counts and outcomes only (FR-12/42).
-    ...(result.reading ? { reading: String(result.reading).slice(0, 1200) } : {})
+    ...(result.reading ? { reading: String(result.reading).slice(0, 1200) } : {}),
+    ...(result.outcome === 'chat' ? { reply: String(result.reply || '').slice(0, 4000), cards: result.cards || [] } : {})
   }].slice(-HISTORY_MAX);
   writeUser(job.uid, {
     ...rec,
@@ -300,7 +322,7 @@ function finish(job, result) {
     pending: result.pending !== undefined ? result.pending : rec.pending,
     history
   });
-  if (result.outcome === 'ready' && onProposal) {
+  if ((result.outcome === 'ready' || (result.outcome === 'chat' && result.pending)) && onProposal) {
     try { onProposal(job.uid, result.pending, job); } catch (e) { console.error('coach notify failed', e); }
   }
 }
@@ -329,6 +351,8 @@ async function execute(job) {
   if (job.kind === 'debrief' && !payloadLib.findWorkout(S, job.workoutId)) {
     return finish(job, { outcome: 'failed', errorClass: 'noworkout' });
   }
+
+  if (job.kind === 'chat') return executeChat(job, S, cfg, adapter);
 
   const pendingCreate = job.refine ? readUser(job.uid).pending : null;
   const payload = payloadLib.build(S, {
@@ -389,6 +413,46 @@ async function execute(job) {
       ...attempt.result
     };
     return finish(job, { outcome: 'ready', pending });
+  } finally {
+    aborts.delete(job.uid);
+    if (jobDir) removeJobDir(jobDir, unprivilegedIds());
+  }
+}
+
+async function executeChat(job, S, cfg, adapter) {
+  const jobDir = adapter.spawns === false ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'coach-'));
+  const env = cfgStore.jobEnv(jobDir || os.tmpdir(), cfgStore.credentialFor(job.uid));
+  const ctl = new AbortController();
+  aborts.set(job.uid, ctl);
+  try {
+    const ids = jobDir && unprivilegedIds();
+    if (ids) shareJobDir(jobDir, ids);
+    const openProposal = readUser(job.uid).pending;
+    const attempt = await runChat({
+      adapter, cfg, S, message: job.note, handle: handleFor(job.uid), openProposal,
+      lang: job.lang || (S.langAuto === true ? payloadLib.langTag(process.env.DEFAULT_LANG) : null),
+      model: cfgStore.modelFor(cfg), timeoutMs: TIMEOUT_MS, today: todayISO(),
+      invokeOpts: { jobDir, env, fetch: fetchFor(TIMEOUT_MS), signal: ctl.signal, maxTokens: cfg.maxOutputTokens },
+      onStep: step => patchUser(job.uid, {
+        current: { id: job.id, kind: job.kind, state: 'running', startedAt: job.startedAt, step }
+      })
+    });
+    if (!attempt.ok) {
+      const errorClass = ctl.signal.aborted ? 'forgotten' : attempt.errorClass;
+      return finish(job, { outcome: 'failed', errorClass, detail: attempt.detail || whyUnusable(attempt.errors) });
+    }
+    const info = attempt.cards.filter(c => !isActionable(c));
+    const acts = attempt.cards.filter(c => isActionable(c));
+    const rec = readUser(job.uid);
+    const pending = acts.length
+      ? {
+        id: job.id, jobId: job.id, kind: 'chat', createdAt: Date.now(),
+        expiresAt: Date.now() + PENDING_DAYS * 86400000,
+        planHash: hashPlan(payloadLib.canonicalPlan(S)),
+        reply: attempt.reply, cards: acts
+      }
+      : rec.pending;
+    return finish(job, { outcome: 'chat', pending, reply: attempt.reply, cards: info });
   } finally {
     aborts.delete(job.uid);
     if (jobDir) removeJobDir(jobDir, unprivilegedIds());

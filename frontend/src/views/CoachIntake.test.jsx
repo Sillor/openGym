@@ -171,6 +171,15 @@ describe('CoachIntake — the consent screen', () => {
     expect(training.textContent).toContain('your session notes')
   })
 
+  it('the food line says chat can read meal-level diary entries on demand, not only a summary', () => {
+    // CONSENT_VERSION 4: get_food_diary returns named meals, not only daily totals. The bump
+    // already happened for this; the copy has to keep saying so.
+    mount()
+    const food = all('.ob-consent-row').find(r => r.querySelector('b').textContent === 'Food')
+    expect(food.textContent).toMatch(/meals you logged when a question is about them/)
+    expect(food.textContent).not.toMatch(/review window/)
+  })
+
   it('lists the built-in categories first, then whatever the server says actually goes', async () => {
     vi.mocked(disclosure).mockResolvedValue({ categories: ['plan', 'prefs'], providerLabel: 'Anthropic', payer: 'you', host: 'api.anthropic.com' })
     mount()
@@ -328,6 +337,33 @@ describe('CoachIntake — moving around', () => {
     expect(eyebrow()).toBe('Your goal')
     act(() => host.querySelector('.iconbtn').click())
     expect(mocks.nav).toHaveBeenCalledWith('/coach')
+  })
+
+  it('Skip, just chat leaves without building a plan, keeping consent and whatever was answered', () => {
+    mount(); tap('button', 'I understand')
+    tap('.ob-choice', 'Build muscle')
+    tap('button', 'Skip, just chat')
+    expect(requestPlan).not.toHaveBeenCalled()
+    expect(mocks.nav).toHaveBeenCalledWith('/coach', { replace: true })
+    expect(mocks.S.coach.consent.version).toBe(CONSENT_VERSION)
+    expect(mocks.S.coach.profile.goal).toBe('muscle')
+    expect(mocks.S.coach.profile.experience).toBe(null)
+  })
+
+  it('Skip, just chat is on every question screen and not on consent or the editor', () => {
+    mount()
+    expect(eyebrow()).toBe('Before we start')
+    expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Skip, just chat')).toBe(false)
+    tap('button', 'I understand')
+    expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Skip, just chat')).toBe(true)
+  })
+
+  it('the editor does not offer Skip, just chat', () => {
+    mocks.search = 'edit=1'
+    mocks.S.coach = { consent: { agreedAt: '2026-09-01T00:00:00Z', version: CONSENT_VERSION }, profile: { goal: 'strength', experience: 'new', daysPerWeek: 3, sessionMin: 60, preferredDays: [1], equipment: [] }, chat: [] }
+    mount()
+    expect(eyebrow()).toBe('Your goal')
+    expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Skip, just chat')).toBe(false)
   })
 
   it('Skip is offered only on the three optional screens, and never on the last one', () => {

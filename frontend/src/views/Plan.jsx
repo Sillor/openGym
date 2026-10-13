@@ -11,14 +11,12 @@ import {
 import Icon from '../components/Icon.jsx'
 import { Button, Row, Section, Segmented } from '../components/ui.jsx'
 import SwipeRow from '../components/SwipeRow.jsx'
+import Library from './Library.jsx'
 import { copyRoutine, deleteRoutine, restoreRoutine, routineSnapshot } from '../lib/routines.js'
 import { workoutControls } from '../lib/workout-controls.js'
 import { tappable } from '../lib/use-sheet-keyboard.js'
 import { useListReorder, moved } from '../lib/use-list-reorder.js'
 import { glyphOf, DEFAULT_GLYPH } from '../lib/glyphs.js'
-import { DEMO } from '../lib/demo.js'
-import { MOBILE } from '../lib/mobile.js'
-import { coachAvailable } from '../lib/coach.js'
 import { queueOf, queueView } from '../lib/queue.js'
 import { deriveSessionName } from '../lib/session-merge.js'
 import { markUndone, undoMarks } from '../lib/sync-merge.js'
@@ -27,12 +25,21 @@ import {
   chooseRotation, chooseFixedWeek,
 } from '../lib/rotation.js'
 
-// Plan has two views (v1.3.11): Schedule (how you train, and when) and Routines (what you
-// train). The last one you looked at comes back: a per-device convenience, never synced, so it
-// lives in this browser's storage and not in S.
+// Plan has three views: Schedule (how you train, and when), Routines (what you train) and
+// Exercises (the library, which moved in here when the Coach took its tab). The last one you
+// looked at comes back: a per-device convenience, never synced, so it lives in this browser's
+// storage and not in S. A link can ask for one (/plan?view=exercises); the router is a
+// HashRouter, so the query sits in the hash.
 export const PLAN_VIEW_KEY = 'gym_plan_view'
+const VIEWS = ['schedule', 'routines', 'exercises']
+const linkedView = () => /[?&]view=(\w+)/.exec(window.location.hash || '')?.[1]
 const readView = () => {
-  try { return localStorage.getItem(PLAN_VIEW_KEY) === 'routines' ? 'routines' : 'schedule' } catch { return 'schedule' }
+  const linked = linkedView()
+  if (VIEWS.includes(linked)) return linked
+  try {
+    const kept = localStorage.getItem(PLAN_VIEW_KEY)
+    return VIEWS.includes(kept) ? kept : 'schedule'
+  } catch { return 'schedule' }
 }
 
 /* Undo for Plan's two removals (v1.3.11). Both go through the store's normal update, so sync
@@ -125,23 +132,18 @@ export default function Plan() {
   const nav = useNavigate()
   const S = useStore(s => s.S)
   const update = useStore(s => s.update)
-  const config = useStore(s => s.config)
-  const coachMode = useStore(s => s.coachLocal?.mode)
-  const user = useStore(s => s.user)
   const fileRef = useRef(null)
   const [view, setViewState] = useState(readView)
   const setView = v => {
     setViewState(v)
     try { localStorage.setItem(PLAN_VIEW_KEY, v) } catch { /* private mode: the view just isn't remembered */ }
+    // A linked view gives way once you pick another: left in the URL, it would win over your
+    // choice every time back-navigation lands on this entry again.
+    if (linkedView()) nav('/plan', { replace: true })
   }
 
-  /* The Coach's way in from Plan. It used to be a banner over the week; it is the last entry of the
-     Plan menu now, gated by the same predicate every other Coach surface uses, so an instance
-     without the feature sees exactly the menu it would have without it. */
-  const showCoach = coachAvailable(config, user, { demo: DEMO, mobile: MOBILE, coachMode })
-
-  // Share, print, import, starter plans and the Coach: one menu behind the header button, so the
-  // two views below are only about the plan itself.
+  // Share, print, import and starter plans: one menu behind the header button, so the views
+  // below are only about the plan itself. The Coach, once its last entry, has a tab of its own.
   const openMenu = () => {
     const has = planHasRoutines(S)
     menuSheet({
@@ -152,7 +154,6 @@ export default function Plan() {
         { icon: 'note', label: t('Print / Save as PDF'), disabled: !has, onClick: printWholePlan },
         { icon: 'download', label: t('Import a plan file'), onClick: () => fileRef.current?.click() },
         { icon: 'clipboard', label: t('Load starter plan'), onClick: starterPlanSheet },
-        showCoach && { icon: 'sparkles', label: t('Coach'), sub: t('Plan design and reviews, from your own training'), onClick: () => nav('/coach') },
       ],
     })
   }
@@ -167,9 +168,9 @@ export default function Plan() {
     </div>
     <input ref={fileRef} type="file" accept="application/json,.json" onChange={pickFile} hidden />
     <Segmented className="plan-views" value={view} onChange={setView}
-      options={[{ value: 'schedule', label: t('Schedule') }, { value: 'routines', label: t('Routines') }]} />
-    {view === 'routines'
-      ? <Routines S={S} update={update} nav={nav} />
+      options={[{ value: 'schedule', label: t('Schedule') }, { value: 'routines', label: t('Routines') }, { value: 'exercises', label: t('Exercises') }]} />
+    {view === 'exercises' ? <Library embedded />
+      : view === 'routines' ? <Routines S={S} update={update} nav={nav} />
       : <Schedule S={S} update={update} nav={nav} mode={mode} />}
   </div>
 }

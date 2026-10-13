@@ -92,7 +92,7 @@ export default {
     return { ok: true, version: v ? `Claude Agent SDK ${v}` : 'Claude Agent SDK' };
   },
 
-  async invoke({ prompt, jobDir, env, model, timeoutMs }) {
+  async invoke({ prompt, jobDir, env, model, timeoutMs, preamble }) {
     const m = await sdk();
     if (!m) return { code: -1, text: '', stderr: `${PKG} is not installed`, timedOut: false, spawnError: true };
 
@@ -112,7 +112,7 @@ export default {
           // and the VAPID keys cannot reach the model process by inheritance.
           env: { ...env, CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP },
           model: model || undefined,
-          systemPrompt: SYSTEM_PROMPT,
+          systemPrompt: preamble || SYSTEM_PROMPT,
           stderr: data => { if (stderr.length < OUTPUT_CAP) stderr += data; },
           spawnClaudeCodeProcess: spawnAsCoach
         }

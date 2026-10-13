@@ -91,12 +91,12 @@ const num = v => ((typeof v === 'number' && Number.isFinite(v)) || (typeof v ===
 const day = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
 const list = v => (Array.isArray(v) ? v : []);
 // The equipment of the profile the app is filtering by, or nothing when filtering is off.
-function activeEquipment(S) {
+export function activeEquipment(S) {
   if (!S.equipFilterOn) return [];
   const prof = list(S.equipProfiles).find(x => x && x.id === S.activeEquipId);
   return list(prof?.equipment);
 }
-function cleanProfile(profile) {
+export function cleanProfile(profile) {
   const days = Array.isArray(profile.preferredDays) ? profile.preferredDays : [];
   const equipment = Array.isArray(profile.equipment) ? profile.equipment : [];
   return {
@@ -155,7 +155,7 @@ export const isWarmupSet = s => {
   if (ph) return ph === 'warmup' || ph === 'warm-up' || ph === 'warm_up';
   return s?.warmup === true;
 };
-function readSession(entry, fallback) {
+export function readSession(entry, fallback) {
   const target = (entry && entry.target) || fallback || {};
   const ex = LIB_BY_ID.get(entry?.id);
   const mode = modeOf(target, ex);
@@ -280,7 +280,7 @@ export function cleanPlan(S) {
 export { LIBRARY, MAX_LIBRARY, libraryHas, libraryName, librarySlice, isStretch };
 
 /* ---------- effort scale (mirrors history.js effortOf) ---------- */
-const effortOf = S => {
+export const effortOf = S => {
   const e = S && S.effort;
   return e === 'none' || e === 'rir' || e === 'rpe' ? e : (S && S.showRir ? 'rir' : 'none');
 };
@@ -342,7 +342,7 @@ function aggregates(S, workouts) {
 
 /** Every exercise id the plan names or the given workouts logged — the ones a proposal has to
  *  be able to refer to, so they ride in the library slice whatever the cap or the filter. */
-function trainedIds(S, workouts) {
+export function trainedIds(S, workouts) {
   const ids = new Set();
   (S.routines || []).forEach(r => (r.ex || []).forEach(e => ids.add(e.id)));
   (workouts || []).forEach(w => (w.entries || []).forEach(en => ids.add(en.id)));
@@ -378,7 +378,7 @@ const targetOf = en => (en.target && typeof en.target === 'object'
   : null);
 
 /** One older workout as a summary: what was done, the top set, whether targets were hit. */
-function compactWorkout(w) {
+export function compactWorkout(w) {
   return {
     d: day(w.d),
     name: word(w.name, NAME_MAX),
@@ -405,7 +405,7 @@ function compactWorkout(w) {
 }
 
 /** One workout, reduced to what a coach reads. */
-function cleanWorkout(w) {
+export function cleanWorkout(w) {
   return {
     d: day(w.d),
     name: word(w.name, NAME_MAX),
@@ -481,7 +481,7 @@ export function cleanNutrition(S, from, to, today) {
 }
 
 /** The body-weight series between two days, each weigh-in a date and a number. */
-function weighIns(S, from, to) {
+export function weighIns(S, from, to) {
   return list(S.bodyweight)
     .map(b => ({ d: day(b?.d), w: num(b?.w) }))
     .filter(b => b.d && b.w !== undefined && (!from || b.d >= from) && (!to || b.d <= to));

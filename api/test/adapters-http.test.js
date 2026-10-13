@@ -16,7 +16,7 @@ const gemini = (await import('../coach/core/adapters/gemini.js')).default;
 const compatible = (await import('../coach/core/adapters/compatible.js')).default;
 const { attemptOnce } = await import('../coach/core/pipeline.js');
 const { HTTP_PROVIDERS, validateBaseUrl, validateHeaders } = await import('../coach/core/providers.js');
-const { SYSTEM_PROMPT } = await import('../coach/core/system-prompt.js');
+const { SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT } = await import('../coach/core/system-prompt.js');
 
 /** A fetch that records what it was asked and answers from a script. Like the real one, it
  *  refuses an already-aborted signal without putting anything on the wire. */
@@ -76,6 +76,47 @@ test('OpenAI: chat completions in JSON mode, bearer auth, max_completion_tokens'
   assert.equal(c.body.messages[0].content, SYSTEM_PROMPT);
   assert.equal(c.body.messages[1].content, 'P');
   assert.ok('max_completion_tokens' in c.body && !('max_tokens' in c.body));
+});
+
+test('OpenAI invokeChat: role messages and tool declarations, no JSON mode', async () => {
+  assert.equal(openai.nativeTools, true);
+  assert.equal(typeof openai.invokeChat, 'function');
+  assert.ok(!anthropic.nativeTools, 'Anthropic has no native tool loop — the agent speaks JSON');
+  assert.ok(!gemini.nativeTools, 'Gemini has no native tool loop');
+
+  const f = fakeFetch([ok({
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: {
+        content: '',
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_workout_history', arguments: '{"days":7}' } }]
+      }
+    }]
+  })]);
+  const r = await openai.invokeChat({
+    cfg: {}, env, model: 'gpt-x', fetch: f, preamble: CHAT_SYSTEM_PROMPT,
+    system: 'chat rules',
+    messages: [
+      { role: 'user', content: 'How did last week go?' },
+      { role: 'assistant', content: '', calls: [{ id: 'call_0', name: 'get_routine', args: {} }] },
+      { role: 'tool', id: 'call_0', name: 'get_routine', content: '{"ok":true}' }
+    ],
+    tools: [{ name: 'get_workout_history', description: 'history', parameters: { type: 'object' } }],
+    final: false
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].name, 'get_workout_history');
+  const c = f.calls[0];
+  assert.equal(c.body.messages[0].content, CHAT_SYSTEM_PROMPT + '\n\n' + 'chat rules');
+  assert.equal(c.body.messages[1].role, 'user');
+  assert.equal(c.body.messages[2].role, 'assistant');
+  assert.equal(c.body.messages[2].tool_calls[0].function.name, 'get_routine');
+  assert.equal(c.body.messages[3].role, 'tool');
+  assert.equal(c.body.messages[3].tool_call_id, 'call_0');
+  assert.equal(c.body.tools[0].function.name, 'get_workout_history');
+  assert.equal(c.body.tool_choice, 'auto');
+  assert.equal('response_format' in c.body, false, 'JSON mode stays on the single-shot path');
 });
 
 test('Gemini: generateContent with the key as a header — never ?key= — and JSON output requested', async () => {

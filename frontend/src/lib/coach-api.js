@@ -66,6 +66,15 @@ const _requestPlan = async intake => DEMO ? (await demo()).demoPlan(S(), intake)
 export const requestPlan = (...a) => _requestPlan(...a).then(track)
 const _refinePlan = async text => DEMO ? (await demo()).demoRefine(S()) : LOCAL() ? (await local()).localRefine(S(), text) : api('/api/coach/plan', { method: 'POST', body: JSON.stringify({ refine: text, lang: getLang() }) })
 export const refinePlan = (...a) => _refinePlan(...a).then(track)
+// A chat turn: the Coach reads what it needs through its tools and answers in words, with a card
+// for anything it shows or proposes (lib/coach-chat.js). A phone with its own key runs the same
+// agent loop in-process (lib/coach-local.js).
+const _sendChat = async (message, lang = getLang()) => {
+  if (DEMO) return (await demo()).demoChat(S(), message)
+  if (LOCAL()) return (await local()).localChat(S(), message, lang)
+  return api('/api/coach/chat', { method: 'POST', body: JSON.stringify({ message, lang }) })
+}
+export const sendChat = (...a) => _sendChat(...a).then(track)
 const _requestDebrief = async workoutId => DEMO ? (await demo()).demoDebrief(S(), workoutId) : LOCAL() ? (await local()).localDebrief(S(), workoutId) : api('/api/coach/debrief', { method: 'POST', body: JSON.stringify({ workoutId: workoutId || null, lang: getLang() }) })
 export const requestDebrief = (...a) => _requestDebrief(...a).then(track)
 // The room: anonymous medians across the profiles on this instance that opted in. Only a

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PAGES, PAGE_IDS, ROOT_GROUPS, SEARCH, pageVisible, searchSettings, pageTrail, fold } from './settings-pages.js'
+import { weeklyCalorieNudge } from '../lib/nutrition.js'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -446,6 +447,67 @@ describe('nutrition settings', () => {
     expect(host.textContent).toContain('2,057 kcal')
     expect(host.textContent).toContain('180 cm')
     expect(host.textContent).toContain('0.5 kg')
+    expect(host.querySelector('[aria-label="Birthday"]').type).toBe('date')
+  })
+
+  it('accepts a weekly calorie change into customKcal only, and dismiss hides it until an input changes', () => {
+    const isoDaysAgo = n => {
+      const d = new Date()
+      d.setHours(12, 0, 0, 0)
+      d.setDate(d.getDate() - n)
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+    }
+    const born = new Date()
+    born.setFullYear(born.getFullYear() - 30)
+    const birthday = born.getFullYear() + '-' + String(born.getMonth() + 1).padStart(2, '0') + '-' + String(born.getDate()).padStart(2, '0')
+    mocks.S = {
+      ...mocks.S,
+      unit: 'kg',
+      bodyweight: [
+        { d: isoDaysAgo(28), w: 82, t: 1 },
+        { d: isoDaysAgo(21), w: 81, t: 1 },
+        { d: isoDaysAgo(14), w: 80, t: 1 },
+      ],
+      foodLog: [4, 3, 2, 1].map(n => ({ d: isoDaysAgo(n), kcal: 2000 })),
+      nutrition: { heightCm: 180, birthday, sex: 'male', activity: 'moderate', goal: 'maintain' },
+    }
+    const proposal = weeklyCalorieNudge(mocks.S)
+    expect(proposal.proposed).toBe(true)
+    mount('nutrition')
+    expect(host.textContent).toContain(proposal.reason)
+    const accept = [...host.querySelectorAll('button')].find(b => b.textContent === 'Accept')
+    act(() => accept.click())
+    expect(mocks.S.nutrition.customKcal).toBe(proposal.kcal)
+    expect(mocks.S.nutrition.customProtein ?? null).toBeNull()
+    expect(mocks.S.nutrition.customCarbs ?? null).toBeNull()
+    expect(mocks.S.nutrition.customFat ?? null).toBeNull()
+    expect(mocks.S.nutrition.heightCm).toBe(180)
+
+    mocks.S = {
+      ...mocks.S,
+      nutrition: { heightCm: 180, birthday, sex: 'male', activity: 'moderate', goal: 'maintain' },
+    }
+    act(() => root.unmount())
+    root = createRoot(host)
+    mount('nutrition')
+    const dismiss = [...host.querySelectorAll('button')].find(b => b.textContent === 'Dismiss')
+    act(() => dismiss.click())
+    expect(mocks.S.nutrition.nudgeDismissed).toBeTruthy()
+    expect(mocks.S.nutrition.customKcal ?? null).toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    mount('nutrition')
+    expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Accept')).toBe(false)
+
+    mocks.S = {
+      ...mocks.S,
+      foodLog: [...mocks.S.foodLog, { d: mocks.S.foodLog[0].d, kcal: 1 }],
+    }
+    act(() => root.unmount())
+    root = createRoot(host)
+    mount('nutrition')
+    expect(host.textContent).toContain(weeklyCalorieNudge(mocks.S).reason)
+    expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Accept')).toBe(true)
   })
 
   it('says what is missing, and stores a height you type', () => {

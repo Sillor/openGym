@@ -136,3 +136,46 @@ describe('server nutrition targets match the app', () => {
     expect(srv.targets.source).toBe('inferred')
   })
 })
+
+// Chat cards, steps and history bounds: the app (coach-chat.js) is coded against the shape
+// docs/dev/COACH_CHAT.md describes, and the phone's own-key mode runs the same core the
+// server does. Pin the two sides so a renamed step or a new card type cannot ship on one
+// and not the other.
+import { TOOLS, STEP_WRITING, ACTIONABLE, isActionable } from '../../../api/coach/core/tools.js'
+import { HISTORY_ENTRIES, HISTORY_CHARS } from '../../../api/coach/core/agent.js'
+import { DATA_CATEGORIES } from '../../../api/coach/core/categories.js'
+import { ACTION_CARDS, INFO_CARDS, stepText } from './coach-chat.js'
+import { CATEGORY_TEXT } from './coach.js'
+
+describe('chat contract: server and phone agree', () => {
+  it('every tool step is one of the English strings the app translates', () => {
+    for (const tool of TOOLS) {
+      expect(stepText(tool.step), tool.name).toBe(tool.step)
+    }
+    expect(stepText(STEP_WRITING)).toBe(STEP_WRITING)
+    expect(stepText('Invented step')).toBeNull()
+  })
+
+  it('actionable cards are the ones the pending slot holds', () => {
+    expect([...ACTIONABLE].sort()).toEqual([...ACTION_CARDS].sort())
+    expect(INFO_CARDS).toEqual(['exercises', 'nutrition'])
+    expect(isActionable({ type: 'changes' })).toBe(true)
+    expect(isActionable({ type: 'routines' })).toBe(true)
+    expect(isActionable({ type: 'exercises' })).toBe(false)
+    expect(isActionable({ type: 'nutrition' })).toBe(false)
+  })
+
+  it('the conversation window is the last 20 turns, 1500 characters each', () => {
+    expect(HISTORY_ENTRIES).toBe(20)
+    expect(HISTORY_CHARS).toBe(1500)
+  })
+
+  it('consent categories the screen names are the ones the payload and the tools share', () => {
+    expect(Object.keys(CATEGORY_TEXT)).toEqual([...DATA_CATEGORIES])
+  })
+
+  it('the phone’s chat cap matches the server’s default chatDaily', async () => {
+    const { LOCAL_CHAT_DAILY_CAP } = await import('./coach-local.js')
+    expect(LOCAL_CHAT_DAILY_CAP).toBe(200)
+  })
+})

@@ -17,6 +17,19 @@ import { extractJSON, contractOK } from './parse.js';
 import { validatePlan, validateReview, validateDebrief } from './validate.js';
 import { isChangeList, changesOntoPlan } from './refine-changes.js';
 
+/** How a provider call that produced no answer failed, or null when it answered. Shared with
+ *  the chat agent, so a chat and a review blame the same thing for the same failure. */
+export function transportFailure(r) {
+  if (r.timedOut) return { ok: false, errorClass: 'timeout' };
+  if (r.spawnError) return { ok: false, errorClass: 'missing', detail: r.stderr?.slice(0, 300) };
+  if (r.code !== 0) {
+    const err = (r.stderr || r.text || '').toLowerCase();
+    const authish = /auth|unauthor|api key|credential|token|401|403|login/.test(err);
+    return { ok: false, errorClass: authish ? 'auth' : 'provider', detail: (r.stderr || r.text || '').slice(0, 300) };
+  }
+  return null;
+}
+
 /**
  * One attempt: prompt → provider → parse → validate.
  *
@@ -35,13 +48,8 @@ export async function attemptOnce({ adapter, cfg, kind, payload, model, timeoutM
     model: model || null, timeoutMs, ...invokeOpts
   });
 
-  if (r.timedOut) return { ok: false, errorClass: 'timeout' };
-  if (r.spawnError) return { ok: false, errorClass: 'missing', detail: r.stderr?.slice(0, 300) };
-  if (r.code !== 0) {
-    const err = (r.stderr || r.text || '').toLowerCase();
-    const authish = /auth|unauthor|api key|credential|token|401|403|login/.test(err);
-    return { ok: false, errorClass: authish ? 'auth' : 'provider', detail: (r.stderr || r.text || '').slice(0, 300) };
-  }
+  const failed = transportFailure(r);
+  if (failed) return failed;
 
   const parsed = extractJSON(r.text);
   if (parsed.error) return { ok: false, repairable: !repair, errors: [parsed.error], raw: r.text, errorClass: 'unusable' };

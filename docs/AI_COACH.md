@@ -1,6 +1,8 @@
 # The AI Coach
 
-An optional AI that **designs** a training plan and **revises it from what you actually log**,
+An optional AI **coach and nutritionist**: a conversation on the Coach tab that reads your
+history, the food diary and the exercise library through tools, then puts every change on a
+confirm-or-decline card. It still designs a plan and revises it from what you actually log,
 running on your own server under your own provider account, off until an admin turns it on.
 
 > This document grows with the feature, which lands across a sequence of PRs. Anything described
@@ -40,11 +42,11 @@ enabling the Coach is a decision you make in the app.
 
 ### Where people find it
 
-The Coach has one door: the **Coach** entry in the **Plan** menu (the button in the top-right
-corner of the Plan header, last entry: *Plan design and reviews, from your own training*), which
-opens the chat. Up to v1.3.9 it was a card at the top of Plan. The phone app also has
-**Settings → AI Coach**, where the phone chooses between your server's Coach and a key of its
-own (see [On the phone](#on-the-phone)).
+The Coach has one door: the **Coach** tab (sparkles), which **replaces Exercises** whenever the
+Coach is on. The exercise library lives as the **Exercises** segment of Plan (`Schedule |
+Routines | Exercises`); `/library` still works. Without the Coach, the Exercises tab is
+unchanged. The phone app also has **Settings → AI Coach**, where the phone chooses between your
+server's Coach and a key of its own (see [On the phone](#on-the-phone)).
 
 The entry appears only when all of these hold:
 
@@ -93,15 +95,27 @@ The card says two things worth reading: which account is being spent, and — fo
 providers — that jobs run no child process at all, so the privilege-drop line reads as not
 applicable rather than as a problem.
 
-**3. Use it.** Each person opens **Plan → Coach**, agrees to the consent screen — which lists
-exactly what leaves the server, generated from the same module that builds payloads — and
-answers a short intake, one question per screen: goal, experience, days per week, session
-length, equipment, limitations. From then on the Coach is a chat. The answers are its first
-message; while a job runs a typing bubble shows the elapsed time; the proposal arrives as a
-card with a tab per routine and a reason under every change; free text below it asks for a
-refinement, a button applies it. Coming back later, asking for a review of what was logged
-since, or changing an answer all happen in the same conversation. Users cannot switch the
-Coach off themselves — only the admin can, from the card above.
+**3. Use it.** Each person opens the **Coach** tab, agrees to the consent screen — which lists
+exactly what leaves the server, generated from the same module that builds payloads — and can
+answer a short intake (goal, experience, days per week, session length, equipment, limitations)
+or **Skip, just chat**. Consent stays mandatory; the questions do not. Missing details get asked
+inline when the Coach needs them.
+
+From then on the Coach is a conversation, not only a plan/review job. A turn is `POST
+/api/coach/chat`: the model reads what it needs through tools (workout history, exercise
+progress, the library, meal-level food-diary entries on demand, body metrics, the current
+routine), then answers in words. Anything it proposes — a change-set, new routines, new calorie
+and macro targets — arrives as a **confirm-or-decline card**. Informational cards (exercises to
+look at, the food diary against targets) sit under the reply. Nothing changes until you
+confirm; **Not now** declines. A later message supersedes an older chat proposal (the old card
+reads **Outdated**). **Clear chat** in the header menu forgets the thread; the plan, the
+profile and what you already applied stay.
+
+Chat has its **own daily cap** (`caps.chatDaily`, default 200, 0 = unlimited on the admin card),
+separate from the plan/review/debrief cap. Chat still counts toward the instance-wide spend
+brake. The typing bubble shows what the Coach is doing (`job.step`: reading history, checking
+the diary, writing a reply, …). Users cannot switch the Coach off themselves — only the admin
+can, from the card above.
 
 A key, a model and the account binding described below belong to the provider they were
 entered for. Switching chips does not clear them: the Anthropic key is still there when you
@@ -253,9 +267,9 @@ renders from, so the screen cannot drift from the payload — are:
 | Category | What it covers |
 | --- | --- |
 | `plan` | routines, exercises, sets/reps, schedule, progression settings |
-| `training` | logged sets, targets, effort ratings, durations, PRs and session notes in the review window |
+| `training` | logged sets, targets, effort ratings, durations, PRs and session notes; usually the last few weeks, further back when a chat question needs it |
 | `bodyweight` | weigh-ins in the window and your goal weight |
-| `nutrition` | daily totals and targets for the review window, today's meal names, and food preferences — not photos, not the vision prompt. Review and debrief only |
+| `nutrition` | daily totals and targets, meal-level diary entries when a chat question is about them, and food preferences — not photos, not the vision prompt |
 | `profile` | the intake answers you gave the Coach, including any limitations |
 | `cohort` (optional) | only with comparison on and your own opt-in: anonymous medians from the other people sharing — never their data, and never yours to them beyond the same medians |
 | `prefs` | unit, language, effort scale |
@@ -450,12 +464,14 @@ The App-Store build has no server of its own, so the Coach there is a choice mad
   phone). A paired phone is an ordinary profile: the Coach runs on your server with whatever
   provider the admin configured, under the rules above, and nothing on the phone changes.
 - **Bring my own API key.** The phone calls Anthropic, OpenAI, Gemini or a compatible endpoint
-  directly, with a key you paste. It runs the same payload allowlist, the same validator and
-  the same single repair round as the server, in the app. The key is kept in the platform's
-  secure storage — Keychain on iOS, the Keystore-backed store on Android — and never in the
-  app's state, so it cannot ride along in a backup, an export or a sync. You pay: the screen
-  says which host each request goes to and what leaves the device before you choose, and a
-  local daily cap stands in for the one an admin would have set.
+  directly, with a key you paste. It runs the same payload allowlist, the same validator, the
+  same single repair round **and the same chat agent loop** (tools, cards, last/pending shapes)
+  as the server, in the app. The key is kept in the platform's secure storage — Keychain on iOS,
+  the Keystore-backed store on Android — and never in the app's state, so it cannot ride along
+  in a backup, an export or a sync. You pay: the screen says which host each request goes to
+  and what leaves the device before you choose. A local daily cap of 10 stands in for
+  plan/review jobs; chat has its own allowance of 200, kept on the same device-file daily
+  record an admin cap would have used.
 
   A compatible endpoint has to be **`https://`** here. Android does not let apps send
   unencrypted `http://` traffic, so a model on your LAN at `http://ollama.lan:11434` cannot be

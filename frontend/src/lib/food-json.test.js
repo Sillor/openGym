@@ -15,7 +15,7 @@ describe('parseFoodAnalysis', () => {
     const text = 'Here is the meal:\n```json\n' + JSON.stringify(egg) + '\n```\nHope that helps.'
     expect(parseFoodAnalysis(text)).toEqual({
       ok: true,
-      items: [{ name: 'Egg', kcal: 70, protein: 6.3, carbs: 0.4, fat: 4.8, grams: 50 }]
+      items: [{ name: 'Egg', kcal: 70, protein: 6.3, carbs: 0.4, fat: 4.8, grams: 50, servingQty: 1, servingUnit: 'serving' }]
     })
     const bare = '```\n' + JSON.stringify({ ...egg, calories: 70.6, protein: '6.24' }) + '\n```'
     const again = parseFoodAnalysis(bare)
@@ -62,9 +62,11 @@ describe('parseFoodAnalysis', () => {
     expect(ok.items[0].carbs).toBe(20)
     expect(ok.items[0].fat).toBe(10)
     expect(ok.items[0].grams).toBe(250)
+    expect(ok.items[0].servingQty).toBe(1)
+    expect(ok.items[0].servingUnit).toBe('serving')
     expect(ok.items[0].ingredients).toEqual([
-      { name: 'Chicken', kcal: 200, protein: 25, carbs: 0, fat: 8, grams: 150 },
-      { name: 'Rice', kcal: 100, protein: 5, carbs: 20, fat: 2, grams: 100 }
+      { name: 'Chicken', kcal: 200, protein: 25, carbs: 0, fat: 8, grams: 150, qty: 1, unit: 'serving' },
+      { name: 'Rice', kcal: 100, protein: 5, carbs: 20, fat: 2, grams: 100, qty: 1, unit: 'serving' }
     ])
     expect(ok.items[0].sugar).toBeUndefined()
 
@@ -106,6 +108,68 @@ describe('parseFoodAnalysis', () => {
     expect(parsed.ok).toBe(true)
     expect(parsed.items.map(i => i.name)).toEqual(['Egg', 'Toast'])
     expect(parsed.items[0].ingredients).toBeUndefined()
+    expect(parsed.items[0].servingQty).toBe(1)
+    expect(parsed.items[0].servingUnit).toBe('serving')
     expect(parsed.items[1].grams).toBe(30)
+    expect(parsed.items[1].servingQty).toBe(1)
+    expect(parsed.items[1].servingUnit).toBe('serving')
+  })
+
+  it('keeps the first 8 ingredients when the model returns 12', () => {
+    const ingredients = []
+    for (let i = 1; i <= 12; i++) {
+      ingredients.push({ name: 'Food ' + i, grams: 10, calories: 10, protein: 1, carbs: 1, fat: 0, quantity: i, unit: 'g' })
+    }
+    const meal = {
+      name: 'Plate',
+      calories: 80,
+      protein: 8,
+      carbs: 8,
+      fat: 0,
+      serving_size_grams: 80,
+      ingredients
+    }
+    const parsed = parseFoodAnalysis(JSON.stringify(meal))
+    expect(parsed.ok).toBe(true)
+    expect(parsed.items[0].ingredients).toHaveLength(8)
+    expect(parsed.items[0].ingredients.map(row => row.name)).toEqual([
+      'Food 1', 'Food 2', 'Food 3', 'Food 4', 'Food 5', 'Food 6', 'Food 7', 'Food 8'
+    ])
+    expect(parsed.items[0].kcal).toBe(80)
+    expect(parsed.items[0].grams).toBe(80)
+  })
+
+  it('round-trips serving_quantity and serving_unit', () => {
+    const meal = {
+      name: 'Soup',
+      serving_quantity: '2',
+      serving_unit: ' Cup ',
+      calories: 120,
+      protein: 4,
+      carbs: 18,
+      fat: 3,
+      serving_size_grams: 480,
+      ingredients: [
+        { name: 'Broth', quantity: 400, unit: 'ml', calories: 40, protein: 2, carbs: 4, fat: 1, grams: 400 },
+        { name: 'Noodles', quantity: 1, unit: 'piece', calories: 80, protein: 2, carbs: 14, fat: 2, grams: 80 }
+      ]
+    }
+    expect(parseFoodAnalysis(JSON.stringify(meal))).toEqual({
+      ok: true,
+      items: [{
+        name: 'Soup',
+        kcal: 120,
+        protein: 4,
+        carbs: 18,
+        fat: 3,
+        grams: 480,
+        servingQty: 2,
+        servingUnit: 'cup',
+        ingredients: [
+          { name: 'Broth', kcal: 40, protein: 2, carbs: 4, fat: 1, grams: 400, qty: 400, unit: 'ml' },
+          { name: 'Noodles', kcal: 80, protein: 2, carbs: 14, fat: 2, grams: 80, qty: 1, unit: 'piece' }
+        ]
+      }]
+    })
   })
 })

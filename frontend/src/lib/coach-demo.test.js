@@ -10,7 +10,7 @@
 // test here starts a job and then drains it. A test that leaves one running would 409 the next.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  demoStatus, demoPlan, demoReview, demoRefine, demoDebrief, demoResolve, demoCohort, demoDisclosure
+  demoStatus, demoPlan, demoReview, demoRefine, demoDebrief, demoChat, demoResolve, demoCohort, demoDisclosure
 } from './coach-demo.js'
 import { EXDB, EXIDX } from './exercises.js'
 import { planHash, validateProposal, applyChangeSet } from './coach.js'
@@ -58,7 +58,7 @@ afterEach(() => { vi.useRealTimers() })
 
 describe('coach-demo — the job machine', () => {
   it('is idle until asked, and reports the same cap shape the real status does', () => {
-    expect(demoStatus()).toEqual({ job: null, pending: null, cap: { used: 0, limit: 0 }, lastError: null })
+    expect(demoStatus()).toEqual({ job: null, pending: null, cap: { used: 0, limit: 0 }, lastError: null, last: null })
   })
 
   it('answers 2.2 s later, not before — the job is visible for the whole wait', () => {
@@ -95,7 +95,7 @@ describe('coach-demo — the job machine', () => {
     vi.advanceTimersByTime(864e5)
     expect(demoStatus().pending).toBeTruthy()
     expect(demoResolve()).toEqual({ ok: true })
-    expect(demoStatus()).toEqual({ job: null, pending: null, cap: { used: 0, limit: 0 }, lastError: null })
+    expect(demoStatus()).toEqual({ job: null, pending: null, cap: { used: 0, limit: 0 }, lastError: null, last: null })
   })
 
   it('a builder that throws ends the job, records the failure, and does not refuse the next request', () => {
@@ -400,5 +400,39 @@ describe('coach-demo — defects found while writing these tests', () => {
     expect(() => think(() => demoDebrief(S))).not.toThrow()
     expect(demoStatus().pending).toMatchObject({ kind: 'debrief', workout: { id: 'bare', vol: 0, sets: 0 } })
     expect(demoStatus().job).toBe(null)
+  })
+})
+
+describe('coach-demo — a chat turn', () => {
+  it('a protein question answers with a nutrition card and a proposing change-set', () => {
+    const p = think(() => demoChat(state(), 'How is my protein?'))
+    expect(p.kind).toBe('chat')
+    expect(p.cards.map(c => c.type)).toEqual(['changes'])
+    expect(demoStatus().last).toMatchObject({ outcome: 'chat', reply: expect.any(String) })
+    expect(demoStatus().last.cards.map(c => c.type)).toEqual(['nutrition'])
+    expect(demoStatus().last.jobId).toBe(p.jobId)
+  })
+
+  it('building a routine proposes routines, swapping shows exercises plus a change, a review proposes changes', () => {
+    const S = state()
+    const routines = think(() => demoChat(S, 'Build me a 3-day routine'))
+    expect(routines.cards.map(c => c.type)).toEqual(['routines'])
+    expect(routines.cards[0].bundle.routines.length).toBeGreaterThan(0)
+
+    const swap = think(() => demoChat(S, 'Swap an exercise'))
+    expect(swap.cards.map(c => c.type)).toEqual(['changes'])
+    expect(demoStatus().last.cards.map(c => c.type)).toEqual(['exercises'])
+
+    const review = think(() => demoChat(S, 'Review my last week'))
+    expect(review.cards.map(c => c.type)).toEqual(['changes'])
+    expect(review.cards[0].changes.length).toBeGreaterThan(0)
+  })
+
+  it('walks job.step through the canned list while the job is running', () => {
+    demoChat(state(), 'How is my protein?')
+    expect(demoStatus().job.step).toBe('Checking your food diary')
+    vi.advanceTimersByTime(DELAY)
+    expect(demoStatus().job).toBe(null)
+    expect(demoStatus().last.outcome).toBe('chat')
   })
 })

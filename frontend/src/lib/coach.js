@@ -25,7 +25,9 @@ import { t, tn } from './i18n.js'
 // mentioned.
 // 3: a nutrition category — daily totals, targets, today's meal names, and food preferences.
 //    Photos and the vision prompt stay on the device.
-export const CONSENT_VERSION = 3
+// 4: the chat reads on demand — the food diary meal by meal, and training further back than the
+//    review window — when a question needs it.
+export const CONSENT_VERSION = 4
 
 // Bounds. The whole state has to stay inside the server's 5 MB body limit, and a Coach log
 // that grows forever is exactly the kind of thing that eats it invisibly. Worst case here is
@@ -71,9 +73,9 @@ export const coachAvailable = (config, user, { demo, mobile, coachMode } = {}) =
 // checker could not see them, and eight of the ten had no translation in any pack.
 export const CATEGORY_TEXT = {
   plan: () => [t('Your plan'), t('Routines, exercises, sets and reps, your weekly schedule and progression settings.')],
-  training: () => [t('Your logged training'), t('Sets you logged in the review window: weights, reps, times, effort ratings, how long sessions took, and your session notes.')],
+  training: () => [t('Your logged training'), t('Sets you logged: weights, reps, times, effort ratings, how long sessions took, and your session notes. Usually the last few weeks; further back when you ask about it.')],
   bodyweight: () => [t('Body weight'), t('Weigh-ins from the same window, and your goal weight if you set one.')],
-  nutrition: () => [t('Food'), t('Daily totals and targets for the review window, today\'s meal names, and food preferences — not photos, not the vision prompt.')],
+  nutrition: () => [t('Food'), t('Your food diary: daily totals and targets, the meals you logged when a question is about them, and food preferences — not photos, not the vision prompt.')],
   profile: () => [t('What you tell the Coach'), t('Your intake answers, including any limitations or injuries you describe.')],
   prefs: () => [t('A few preferences'), t('Your unit, your language and which effort scale you log.')]
 }
@@ -348,12 +350,27 @@ function trim(s) {
 /**
  * One line of the chat: `{ id, role: 'user'|'coach', kind, text?, at, ref? }`.
  * kinds — user: 'intake' (the questionnaire, rendered from the live profile), 'text';
- *         coach: 'text', 'applied', 'dismissed', 'reverted', 'error', 'nochange'.
+ *         coach: 'text', 'chat' (a chat reply: `jobId`, informational `cards`), 'applied',
+ *         'dismissed' (a chat card's carry `jobId`, `cardId`, `proposalId`), 'reverted',
+ *         'error', 'nochange'.
  */
 export function appendChat(s, entry) {
   const c = coachOf(s)
   c.chat = [...(c.chat || []), { id: entry.id || uid(), at: entry.at || Date.now(), ...entry }].slice(-CHAT_MAX)
   trim(s)
+}
+
+/**
+ * Empty the conversation. Profile, consent, the log and the undo snapshots stay: this forgets
+ * what was said, not what was decided. `chatClearedAt` is what keeps it empty — the sync merge
+ * drops every line written before it, whichever copy brought it (lib/sync-merge.js), and the
+ * chat does not write back a reply the server still holds from before it. Dismissing a pending
+ * proposal is the caller's (it is the server's slot, not state).
+ */
+export function clearCoachChat(s, now = Date.now()) {
+  const c = coachOf(s)
+  c.chat = []
+  c.chatClearedAt = Math.max(now, Number(c.chatClearedAt) || 0)
 }
 
 /** A job just finished: remember how long it took, for the next typing bubble. */

@@ -1,41 +1,51 @@
 // The conversation with the Coach.
 //
-// Everything the Coach does happens here: your answers as the opening message, a typing
-// bubble while a job runs (with how long it usually takes), the plan or the suggestions as a
-// card you page through, a composer to say what to change, and one button that imports the
-// result. History stays in the thread — come back any time, ask for a review, refine again.
+// A chat turn is words plus cards: informational ones (exercises, the food diary) live in the
+// thread with the reply; proposing ones (a change-set, new routines) stay in the server's
+// pending slot until they are decided, the same way a review or a plan always has. Confirm
+// applies through the existing helpers; Not now dismisses; a receipt is what remains.
 //
 // The thread is `S.coach.chat` (small, synced) plus whatever is live right now from the
-// status poll: a running job or a pending proposal. Nothing about the proposal is copied into
-// the chat until a decision is made about it, so two devices can never disagree on what is
-// pending. Once decided, the chat line carries a `ref` into `S.coach.log`, where the whole
-// proposal — every change, accepted or not, the notes, the evidence — is kept, so saying yes
-// or no never makes it disappear. Turning the Coach off is the admin's decision, not a control
-// on this screen.
+// status poll: a running job or a pending proposal. History stays in the thread — come back
+// any time, ask for a review, refine again.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { closeThenNav } from '../lib/nav.js'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
-import { t, tn } from '../lib/i18n.js'
-import { fmtDate, fmtNum, DAYS, weekOrder, weekStartOf } from '../lib/format.js'
-import { exLine } from '../lib/history.js'
+import { t, tn, exerciseNameFor } from '../lib/i18n.js'
+import { fmtDate, fmtNum, weekStartOf } from '../lib/format.js'
 import { speedUnitOf } from '../lib/speed.js'
 import { DEMO } from '../lib/demo.js'
 import { MOBILE } from '../lib/mobile.js'
 import {
   coachAvailable, hasConsent, emptyCoach, appendChat, recordTiming, estimateMs, profileLines,
   markStale, applicable, applyChangeSet, applyCreatedPlan, recordDismissal, recordDebrief, logEntry,
-  changeTitle, changeValues, exName, canRevert, revertLast
+  changeTitle, clearCoachChat, canRevert, revertLast
 } from '../lib/coach.js'
+import { stepText, chatReply, pendingCards, receiptOf, isOutdated, canUndoReceipt, chatEmpty } from '../lib/coach-chat.js'
 import { insightsFor, sessionInsights } from '../lib/coach-insights.js'
-import { useCoachStatus, requestReview, requestDebrief, requestPlan, refinePlan, resolvePending, cohortStats, setCohortShare, jobErrorText, awaitedJob, settleAwaited, JOB_ERRORS } from '../lib/coach-api.js'
+import { useCoachStatus, requestReview, requestDebrief, requestPlan, sendChat, resolvePending, cohortStats, setCohortShare, jobErrorText, awaitedJob, settleAwaited, JOB_ERRORS } from '../lib/coach-api.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import { glyphOf } from '../lib/glyphs.js'
 import LineChart from '../components/LineChart.jsx'
 import { Button, Check, Switch, Section, Row, SelectRow } from '../components/ui.jsx'
+import CoachText from '../components/coach/CoachText.jsx'
+import ExerciseCards from '../components/coach/ExerciseCards.jsx'
+import ChangeCard, { ChangeRow } from '../components/coach/ChangeCard.jsx'
+import RoutineCard from '../components/coach/RoutineCard.jsx'
+import NutritionCard from '../components/coach/NutritionCard.jsx'
+import Receipt from '../components/coach/Receipt.jsx'
+import { WeekStrip, RoutineBlock } from '../components/coach/PlanParts.jsx'
 import '../coach.css'
+
+const CHIPS = () => [
+  { icon: 'sparkles', text: t('Review my last week') },
+  { icon: 'clipboard', text: t('Build me a 3-day routine') },
+  { icon: 'flame', text: t('How is my protein?') },
+  { icon: 'reset', text: t('Swap an exercise') }
+]
 
 export default function CoachChat() {
   const nav = useNavigate()
@@ -55,18 +65,20 @@ export default function CoachChat() {
   const coachMode = coachLocal?.mode
 
   const ok = coachAvailable(config, user, { demo: DEMO, mobile: MOBILE, coachMode })
-  const ready = ok && hasConsent(S) && !!S.coach?.profile
-  // Not before the store has loaded: a cold start straight on #/coach would otherwise read an
-  // empty state, decide there is no consent, and bounce a consenting user into the intake.
+  const consented = ok && hasConsent(S)
+  // Consent is required. A missing profile is not: the Coach asks for what it needs in the
+  // thread, and "Skip, just chat" on the intake is how someone gets here without answering.
+  // Not before the store has loaded: a cold start straight on #/coach would otherwise bounce
+  // a consenting user into the intake.
   useEffect(() => {
     if (!storeReady) return
     if (!ok) nav('/home', { replace: true })
-    else if (!ready) nav('/coach/intake', { replace: true })
-  }, [storeReady, ok, ready])
+    else if (!hasConsent(S)) nav('/coach/intake', { replace: true })
+  }, [storeReady, ok, S.coach?.consent])
 
-  // A job that ends is either a proposal, "nothing to change", or a failure. The server tells
-  // the client none of that directly — the job simply stops appearing — so the transition is
-  // read here, once, and written into the thread as the Coach's reply. Two ways to see it end:
+  // A job that ends is a chat reply, a proposal, "nothing to change", or a failure. The server
+  // tells the client none of that directly — the job simply stops appearing — so the transition
+  // is read here, once, and written into the thread as the Coach's reply. Two ways to see it end:
   // the job was seen running and is now gone, or the run this app started (its id came back
   // from the start request) is already the server's last outcome — a provider that refuses the
   // connection fails the run before the first status poll, and it is never seen running at all.
@@ -76,46 +88,41 @@ export default function CoachChat() {
     prevJob.current = job
     if (job) return
     const mine = awaitedJob()
-    const endedUnseen = !was && !!mine && last?.id === mine
+    const endedUnseen = !was && !!mine && (last?.id === mine || last?.jobId === mine)
     if (!was && !endedUnseen) return
     settleAwaited(was ? was.id : mine)
     const ms = was?.startedAt ? Date.now() - was.startedAt : 0
     update(s => {
-      // A run that ended unseen has no duration worth learning from.
       if (was) recordTiming(s, ms)
-      if (!pending) {
-        const cls = lastError?.errorClass || (last?.outcome === 'failed' ? (last.errorClass || 'internal') : null)
-        appendChat(s, cls
-          ? { role: 'coach', kind: 'error', text: jobErrorText(cls, lastError?.detail) }
-          : { role: 'coach', kind: 'nochange', text: last?.reading
-            ? last.reading
-            : t('I looked through everything and there is nothing I would change right now. Keep it up, and ask me again after a few more sessions.') })
-      }
+      const reply = chatReply(s, last, pending)
+      if (reply) { appendChat(s, reply); return }
+      if (pending) return
+      const cls = lastError?.errorClass || (last?.outcome === 'failed' ? (last.errorClass || 'internal') : null)
+      appendChat(s, cls
+        ? { role: 'coach', kind: 'error', text: jobErrorText(cls, lastError?.detail) }
+        : { role: 'coach', kind: 'nochange', text: last?.reading
+          ? last.reading
+          : t('I looked through everything and there is nothing I would change right now. Keep it up, and ask me again after a few more sessions.') })
     })
-  }, [job, pending, loading, last?.id])
+  }, [job, pending, loading, last?.id, last?.jobId, last?.outcome, lastError])
 
   useEffect(() => { if (typeof endRef.current?.scrollIntoView === 'function') endRef.current.scrollIntoView({ block: 'end' }) }, [S.coach?.chat?.length, !!job, !!pending])
 
-  if (!ready) return null
+  if (!consented) return null
   const coach = S.coach || emptyCoach()
   const community = !!config?.coach?.community && !DEMO && !(MOBILE && coachMode === 'byok')
+  const empty = chatEmpty(S)
 
-  const send = async () => {
-    const msg = text.trim()
+  const send = async preset => {
+    const msg = (typeof preset === 'string' ? preset : text).trim()
     if (!msg || busy) return
     setBusy(true)
     try {
-      // A message about a proposed plan refines it. With no plan at all — the first attempt
-      // failed, or nothing was ever built — the message asks for one; a review would only
-      // answer that there is no workout to look at, which is how people got stuck.
-      if (pending?.kind === 'create' || !(S.routines || []).length) await refinePlan(msg)
-      else await requestReview(msg)
+      await sendChat(msg)
       update(s => appendChat(s, { role: 'user', kind: 'text', text: msg }))
       setText('')
       refresh()
     } catch (e) {
-      // A server that refuses the job says so in English, with its class beside it: the class
-      // picks the translated line. One with no line here ('shared') keeps the server's words.
       toast(JOB_ERRORS[e.data?.code] || e.message || t('Could not ask the Coach'))
     }
     setBusy(false)
@@ -152,18 +159,51 @@ export default function CoachChat() {
   const showHistory = () => openSheet(close => <HistorySheet S={S} close={close} openSheet={openSheet} />)
   const showCohort = () => openSheet(() => <CohortSheet S={S} update={update} toast={toast} />)
 
+  const applyChat = (card, proposal, ids, opts) => {
+    try {
+      update(s => {
+        const res = card.type === 'routines' ? applyCreatedPlan(s, proposal, opts) : applyChangeSet(s, proposal, ids)
+        appendChat(s, { role: 'coach', kind: 'applied', jobId: pending.jobId, cardId: card.id, proposalId: proposal.id, title: card.title || proposal.summary || '', ref: res?.logId })
+      })
+      resolvePending({ accepted: [card.id] }).catch(() => {})
+      toast(card.type === 'routines' ? t('Your plan is live') : tn('{0} change applied', '{0} changes applied', ids?.length || 1))
+      refresh()
+    } catch (e) { toast(e.message || t('Could not apply those changes')) }
+  }
+  const declineChat = (card, proposal) => {
+    update(s => {
+      recordDismissal(s, proposal)
+      appendChat(s, { role: 'coach', kind: 'dismissed', jobId: pending.jobId, cardId: card.id, proposalId: proposal.id, title: card.title || proposal.summary || '' })
+    })
+    resolvePending({ dismissed: true }).catch(() => {})
+    refresh()
+  }
+
   const idle = !job && !pending
+  const doClear = () => confirmSheet({
+    title: t('Clear this chat?'),
+    message: t('The conversation is forgotten. Your plan, your profile and what you already applied stay.'),
+    confirmText: t('Clear chat'),
+    danger: true,
+    onConfirm: () => {
+      update(s => clearCoachChat(s))
+      if (pending) resolvePending({ dismissed: true }).catch(() => {})
+      refresh()
+    }
+  })
+
   const menu = () => openSheet(close => <div className="chat-menu">
     <h3>{t('Coach')}</h3>
     <div className="sect-b">
+      <Row icon="trash" iconTint="var(--red)" title={t('Clear chat')} subtitle={t('Forget what was said. Your plan stays.')} accessory="chevron" onClick={() => { close(); doClear() }} />
       {idle && <Row icon="sparkles" iconTint="var(--acc)" title={t('Ask for a review')} subtitle={t('What would the Coach change after your last sessions?')} accessory="chevron" onClick={() => { close(); askReview() }} />}
       {idle && !!lastWorkout && <Row icon="checkCircle" iconTint="var(--green)" title={t('Review my last workout')} subtitle={t('What went well, what to watch, what to do next time')} accessory="chevron" onClick={() => { close(); askDebrief() }} />}
       {idle && !!(S.routines || []).length && <Row icon="wrench" iconTint="var(--orange)" title={t('Improve a routine')} subtitle={t('Pick one; the Coach works on just that')} accessory="chevron" onClick={() => { close(); pickRoutine() }} />}
       {community && <Row icon="person" iconTint="var(--teal)" title={t('Compare with others here')} subtitle={t('Anonymous medians from this instance')} accessory="chevron" onClick={() => { close(); showCohort() }} />}
-      <Row icon="history" iconTint="var(--blue)" title={t('Everything the Coach proposed')} subtitle={t('Plans, suggestions and debriefs, kept')} accessory="chevron" onClick={() => { close(); showHistory() }} />
+      <Row icon="history" iconTint="var(--blue)" title={t('Coach history')} subtitle={t('Plans, suggestions and debriefs, kept')} accessory="chevron" onClick={() => { close(); showHistory() }} />
       {idle && <Row icon="clipboard" iconTint="var(--indigo)" title={t('Start a new plan')} subtitle={t('A fresh plan from your answers; your workouts stay')} accessory="chevron" onClick={() => { close(); askNewPlan() }} />}
-      <Row icon="pencil" iconTint="var(--indigo)" title={t('Edit my answers')} subtitle={t('Goal, days, equipment, limits')} accessory="chevron" onClick={() => closeThenNav(close, '/coach/intake?edit=1')} />
-      <Row icon="clock" iconTint="var(--purple)" title={t('Automatic reviews')} subtitle={cadenceLabel(coach)} accessory="chevron" onClick={() => { close(); cadenceSheet(openSheet, update) }} />
+      <Row icon="pencil" iconTint="var(--indigo)" title={t('Edit coach profile')} subtitle={t('Goal, days, equipment, limits')} accessory="chevron" onClick={() => closeThenNav(close, '/coach/intake?edit=1')} />
+      <Row icon="clock" iconTint="var(--purple)" title={t('Review cadence')} subtitle={cadenceLabel(coach)} accessory="chevron" onClick={() => { close(); cadenceSheet(openSheet, update) }} />
       {canRevert(S) && <Row icon="reset" iconTint="var(--blue)" title={t('Undo the last Coach changes')} accessory="chevron" onClick={() => { close(); doRevert() }} />}
     </div>
     <div style={{ height: 10 }} />
@@ -180,10 +220,22 @@ export default function CoachChat() {
     }
   })
 
+  const undoReceipt = m => {
+    let ok = false
+    update(s => {
+      ok = revertLast(s)
+      if (ok) {
+        const line = (s.coach.chat || []).find(x => x.id === m.id)
+        if (line) line.undone = true
+      }
+    })
+    toast(ok ? t('Plan restored') : t('Nothing to undo'))
+  }
+
   const status = job ? t('thinking…') : pending ? t('has a suggestion for you') : t('here when you need it')
-  const placeholder = pending?.kind === 'create'
-    ? t('What should change?')
-    : job ? t('Coach is thinking…') : t('Message the Coach…')
+  const placeholder = job ? t('Coach is thinking…') : t('Message the Coach…')
+  const addEx = list => send(t('Add {0} to a routine', list.map(exerciseNameFor).join(', ')))
+  const askTargets = () => send(t('Suggest new calorie and macro targets for me.'))
 
   return <div className="narrow chat">
     <div className="chat-hdr">
@@ -197,33 +249,48 @@ export default function CoachChat() {
     </div>
 
     <div className="msgs">
-      <Bubble role="coach">{t('Hi, I’m your Coach. I build your plan from your answers and adjust it from what you actually log. Nothing changes until you say so.')}</Bubble>
+      {empty && <Bubble role="coach">{t('Hi, I’m your Coach. I build your plan from your answers and adjust it from what you actually log. Nothing changes until you say so.')}</Bubble>}
 
-      {(coach.chat || []).map(m => <Message key={m.id} m={m} S={S} profile={coach.profile} openSheet={openSheet} />)}
+      {(coach.chat || []).map(m => <Message key={m.id} m={m} S={S} profile={coach.profile} openSheet={openSheet} onAdd={addEx} onUpdate={askTargets} onUndo={undoReceipt} />)}
 
-      {job && <Typing S={S} kind={job.kind} coachLocal={coachLocal} config={config} />}
+      {job && <Typing S={S} kind={job.kind} step={job.step} coachLocal={coachLocal} config={config} />}
 
-      {pending && !job && (pending.kind === 'create'
-        ? <PlanCard p={pending} S={S} update={update} toast={toast} nav={nav} refresh={refresh} />
-        : pending.kind === 'debrief'
-          ? <DebriefCard p={pending} S={S} update={update} toast={toast} refresh={refresh} />
-          : <ReviewCard p={pending} S={S} update={update} toast={toast} refresh={refresh} />)}
+      {pending && !job && (pending.kind === 'chat'
+        ? pendingCards(pending).map(card => {
+          if (receiptOf(S, pending.jobId, card.id)) return null
+          const outdated = isOutdated(S, pending)
+          if (card.type === 'changes') return <div key={card.id} className="msg coach" style={{ maxWidth: '100%', width: '100%' }}>
+            <ChangeCard pending={pending} card={card} S={S} outdated={outdated}
+              onApply={(proposal, ids) => applyChat(card, proposal, ids)}
+              onDecline={proposal => declineChat(card, proposal)} />
+          </div>
+          if (card.type === 'routines') return <div key={card.id} className="msg coach" style={{ maxWidth: '100%', width: '100%' }}>
+            <RoutineCard pending={pending} card={card} S={S} outdated={outdated}
+              onCreate={(proposal, opts) => applyChat(card, proposal, null, opts)}
+              onDecline={proposal => declineChat(card, proposal)} />
+          </div>
+          return null
+        })
+        : pending.kind === 'create'
+          ? <PlanCard p={pending} S={S} update={update} toast={toast} nav={nav} refresh={refresh} />
+          : pending.kind === 'debrief'
+            ? <DebriefCard p={pending} S={S} update={update} toast={toast} refresh={refresh} />
+            : <ReviewCard p={pending} S={S} update={update} toast={toast} refresh={refresh} />)}
 
       <div ref={endRef} />
     </div>
 
     <div className="composer">
       {idle && !busy && <div className="chips-row">
-        <button className="qchip" onClick={askReview}><Icon name="sparkles" />{t('Review my training')}</button>
+        {CHIPS().map(c => <button key={c.text} className="qchip" onClick={() => send(c.text)}><Icon name={c.icon} />{c.text}</button>)}
         {!!lastWorkout && <button className="qchip" onClick={askDebrief}><Icon name="checkCircle" />{t('Last workout')}</button>}
-        {!!(S.routines || []).length && <button className="qchip" onClick={pickRoutine}><Icon name="wrench" />{t('Improve a routine')}</button>}
         {community && <button className="qchip" onClick={showCohort}><Icon name="person" />{t('Compare')}</button>}
       </div>}
       <div className="composer-in">
         <textarea rows={1} value={text} maxLength={maxMessageLen || 1000} placeholder={placeholder} disabled={!!job}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
-        <button className="send" onClick={send} disabled={!text.trim() || busy || !!job} aria-label={t('Send')}><Icon name="arrowUp" /></button>
+        <button className="send" onClick={() => send()} disabled={!text.trim() || busy || !!job} aria-label={t('Send')}><Icon name="arrowUp" /></button>
       </div>
       {cap?.limit > 0 && <div className="composer-cap">{t('{0} of {1} Coach runs used today', cap.used, cap.limit)}</div>}
     </div>
@@ -240,13 +307,29 @@ function Bubble({ role, kind, at, children }) {
   </div>
 }
 
-function Message({ m, S, profile, openSheet }) {
+function Message({ m, S, profile, openSheet, onAdd, onUpdate, onUndo }) {
   if (m.kind === 'intake') {
     const lines = profileLines(profile)
     return <Bubble role="user" at={m.at}>
       {t('Here is what I am working with:')}
       <ul>{lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
     </Bubble>
+  }
+  if (m.kind === 'chat') {
+    return <div className="msg coach" style={{ maxWidth: '100%', width: '100%' }}>
+      {!!m.text && <div className="bub"><CoachText text={m.text} /></div>}
+      {(m.cards || []).map(card => card.type === 'exercises'
+        ? <ExerciseCards key={card.id} card={card} onAdd={onAdd} />
+        : card.type === 'nutrition' ? <NutritionCard key={card.id} card={card} onUpdate={onUpdate} /> : null)}
+      {m.at && <div className="msg-t">{stamp(m.at)}</div>}
+    </div>
+  }
+  if ((m.kind === 'applied' || m.kind === 'dismissed') && m.cardId) {
+    const entry = m.ref ? logEntry(S, m.ref) : null
+    return <div className="msg coach" style={{ maxWidth: '100%', width: '100%' }}>
+      <Receipt m={m} canUndo={canUndoReceipt(S, m)} onUndo={() => onUndo(m)} onOpen={entry ? () => openSheet(() => <ProposalDetail entry={entry} S={S} />) : undefined} />
+      {m.at && <div className="msg-t">{stamp(m.at)}</div>}
+    </div>
   }
   if (m.kind === 'applied' || m.kind === 'dismissed' || m.kind === 'debrief') {
     const entry = m.ref ? logEntry(S, m.ref) : null
@@ -269,7 +352,7 @@ const stamp = at => {
   return d.toDateString() === today.toDateString() ? time : fmtDate(d.toISOString().slice(0, 10)) + ' · ' + time
 }
 
-function Typing({ S, kind, coachLocal, config }) {
+function Typing({ S, kind, step, coachLocal, config }) {
   const ms = estimateMs(S)
   // "Local" on either side: the phone's own OpenAI-compatible endpoint, or the server's —
   // /api/config names the provider, and a model on the owner's box is nothing like a cloud API.
@@ -283,7 +366,7 @@ function Typing({ S, kind, coachLocal, config }) {
     // local model rather than something wrong; the next line already warns it takes longer.
     eta = local ? '' : t('This usually takes a minute or two.')
   }
-  const doing = kind === 'create' ? t('Building your plan…') : kind === 'debrief' ? t('Looking at that session…') : t('Reading your training…')
+  const doing = stepText(step) || (kind === 'create' ? t('Building your plan…') : kind === 'debrief' ? t('Looking at that session…') : t('Reading your training…'))
   return <div className="msg coach">
     <div className="bub typing"><i /><i /><i /></div>
     <div className="typing-eta">
@@ -359,20 +442,6 @@ function PlanCard({ p, S, update, toast, nav, refresh }) {
   </div>
 }
 
-// In the order the week is set to start on (Settings), like the Plan's own week.
-const WeekStrip = ({ days, ws }) => <div className="pcard-week">
-  {weekOrder(ws).map(d => <div key={d} className={'pcard-wd' + (days.has(d) ? ' on' : '')}>{t(DAYS[d])}</div>)}
-</div>
-
-const RoutineBlock = ({ r, unit, speedUnit }) => <div className="pcard-rt">
-  <div className="pcard-rt-h"><b><Icon name={glyphOf(r.emoji)} />{r.name}</b><span>{tn('{0} exercise', '{0} exercises', r.ex.length)}</span></div>
-  {!!r.why && <div className="pcard-why">{r.why}</div>}
-  {r.ex.map((e, i) => <div key={i} className="pcard-ex">
-    <div className="pcard-ex-r"><span className="pcard-ex-n">{exName(e.id)}</span><span className="pcard-ex-l">{exLine(e, unit, speedUnit)}</span></div>
-    {!!e.why && <div className="pcard-ex-w">{e.why}</div>}
-  </div>)}
-</div>
-
 /* ---------------------------------- a review ---------------------------------- */
 
 function ReviewCard({ p, S, update, toast, refresh }) {
@@ -437,20 +506,6 @@ function ReviewCard({ p, S, update, toast, refresh }) {
         <Button onClick={discard}>{t('Dismiss all')}</Button>
       </div>
     </div>
-  </div>
-}
-
-function ChangeRow({ c, S, stale, badge, children }) {
-  const vals = changeValues(c, S)
-  return <div className={'pcard-chg' + (stale ? ' stale' : '') + (c.status === 'rejected' ? ' declined' : '')}>
-    <div className="grow">
-      <div className="pcard-chg-t">{changeTitle(c, S)}{c.routineName ? <span className="dim" style={{ fontWeight: 400 }}> · {c.routineName}</span> : null}</div>
-      {vals && <div className="pcard-chg-v"><span className="tag">{vals.before}</span><Icon name="chevronRight" style={{ fontSize: 12, color: 'var(--label-3)' }} /><span className="tag acc">{vals.after}</span></div>}
-      <div className="pcard-chg-w">{c.why}</div>
-      {stale && <div className="pcard-chg-stale">{t('Doesn’t match your plan any more, so it can’t be applied.')}</div>}
-    </div>
-    {badge}
-    {children}
   </div>
 }
 

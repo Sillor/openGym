@@ -2,10 +2,11 @@
 // Fence stripping follows Fud AI FoodAnalysis.kt; see NOTICE.md.
 
 const MAX_ITEMS = 12;
-const MAX_INGREDIENTS = 20;
+const MAX_INGREDIENTS = 8;
 const MAX_KCAL = 20000;
 const MAX_MACRO = 2000;
 const MAX_GRAMS = 20000;
+const UNITS = new Set(['g', 'ml', 'cup', 'tbsp', 'piece', 'slice', 'serving']);
 
 /** Model text → `{ ok:true, items }` or `{ ok:false }`. One meal object, or a list of them. */
 export function parseFoodAnalysis(text) {
@@ -95,20 +96,22 @@ function mealOf(food) {
     grams: finite(food, 'serving_size_grams', 'grams')
   });
   if (!header) return null;
+  const serving = amountOf(food, ['serving_quantity', 'servingQty'], ['serving_unit', 'servingUnit']);
+  if (!serving) return null;
   const ingredients = ingredientsOf(food.ingredients);
   if (!ingredients) return null;
-  if (!ingredients.length) return { name, ...header };
+  if (!ingredients.length) return { name, ...header, servingQty: serving.qty, servingUnit: serving.unit };
   const sum = sumOf(ingredients);
   // A breakdown that does not add up to the meal is junk, not a second opinion.
   if (!sum || !close(sum, header)) return null;
-  return { name, ...sum, ingredients };
+  return { name, ...sum, servingQty: serving.qty, servingUnit: serving.unit, ingredients };
 }
 
 function ingredientsOf(raw) {
   if (raw == null) return [];
-  if (!Array.isArray(raw) || raw.length > MAX_INGREDIENTS) return null;
+  if (!Array.isArray(raw)) return null;
   const out = [];
-  for (const item of raw) {
+  for (const item of raw.slice(0, MAX_INGREDIENTS)) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 120) : '';
     const row = rounded({
@@ -118,8 +121,9 @@ function ingredientsOf(raw) {
       fat: finite(item, 'fat'),
       grams: finite(item, 'grams', 'serving_size_grams')
     });
-    if (!name || !row) return null;
-    out.push({ name, ...row });
+    const amount = amountOf(item, ['quantity', 'qty'], ['unit']);
+    if (!name || !row || !amount) return null;
+    out.push({ name, ...row, qty: amount.qty, unit: amount.unit });
   }
   return out;
 }
@@ -147,6 +151,39 @@ function close(sum, header) {
 function near(sum, total, floor) {
   const tol = Math.max(floor, Math.abs(total) * 0.15);
   return Math.abs(sum - total) <= tol + 1e-6;
+}
+
+function amountOf(obj, qtyKeys, unitKeys) {
+  const qty = numberOrDefault(obj, qtyKeys, 1);
+  const unit = unitOrDefault(obj, unitKeys, 'serving');
+  if (qty == null || !unit) return null;
+  const q = round1(qty);
+  if (!(q > 0)) return null;
+  return { qty: q, unit };
+}
+
+function numberOrDefault(obj, keys, fallback) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+    const v = obj[key];
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  }
+  return fallback;
+}
+
+function unitOrDefault(obj, keys, fallback) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+    if (typeof obj[key] !== 'string') return null;
+    const unit = obj[key].trim().toLowerCase();
+    return UNITS.has(unit) ? unit : null;
+  }
+  return fallback;
 }
 
 function finite(obj, ...keys) {

@@ -1,9 +1,10 @@
 // The Coach, on a phone that brings its own API key.
 //
 // No server. The pipeline the server runs — payload allowlist, prompt, provider call, parser,
-// validator, one repair round — is imported from api/coach/core and run here, in-process, so
-// the phone gets exactly the code the server has and not a second opinion of it. The apply
-// engine, staleness, snapshot/revert and the log are the ones every build already uses.
+// validator, one repair round — and the chat agent loop (tools, cards, last/pending shapes)
+// are imported from api/coach/core and run here, in-process, so the phone gets exactly the
+// code the server has and not a second opinion of it. The apply engine, staleness,
+// snapshot/revert and the log are the ones every build already uses.
 //
 // This module is the one static importer of the core, which makes `import('./coach-local.js')`
 // the whole lazy chunk: the exercise catalogue, the prompts and the validator arrive together
@@ -17,6 +18,8 @@
 //     riding into a backup or a sync.
 import * as payloadLib from '../../../api/coach/core/payload.js'
 import { runPipeline } from '../../../api/coach/core/pipeline.js'
+import { runChat } from '../../../api/coach/core/agent.js'
+import { isActionable } from '../../../api/coach/core/tools.js'
 import { HTTP_PROVIDERS, baseUrlFor } from '../../../api/coach/core/providers.js'
 import anthropic from '../../../api/coach/core/adapters/anthropic.js'
 import openai from '../../../api/coach/core/adapters/openai.js'
@@ -31,6 +34,9 @@ import { t, getLang } from './i18n.js'
 
 export const ADAPTERS = { anthropic, openai, gemini, compatible }
 export const LOCAL_DAILY_CAP = 10
+// Chat has its own daily allowance, the same idea as the server's caps.chatDaily, kept on the
+// same `daily` record in the device file (n = plan/review/debrief, chat = chat turns).
+export const LOCAL_CHAT_DAILY_CAP = 200
 // Five minutes is right for a cloud API and wrong for a model on somebody's laptop; the
 // OpenAI-compatible endpoint is the one that may be local, so it gets the long budget.
 export const TIMEOUT_MS = 5 * 60000
@@ -72,12 +78,21 @@ async function handle() {
 async function capState() {
   const d = await loadCoachDevice()
   const today = todayISO()
-  const used = d.daily && d.daily.d === today ? d.daily.n : 0
-  return { used, limit: LOCAL_DAILY_CAP }
+  const rec = d.daily && d.daily.d === today ? d.daily : null
+  return {
+    used: rec ? (rec.n || 0) : 0,
+    limit: LOCAL_DAILY_CAP,
+    chatUsed: rec ? (rec.chat || 0) : 0,
+    chatLimit: LOCAL_CHAT_DAILY_CAP
+  }
 }
-async function bumpDaily() {
-  const { used } = await capState()
-  await saveCoachDevice({ daily: { d: todayISO(), n: used + 1 } })
+async function bumpDaily(kind) {
+  const { used, chatUsed } = await capState()
+  await saveCoachDevice({
+    daily: kind === 'chat'
+      ? { d: todayISO(), n: used, chat: chatUsed + 1 }
+      : { d: todayISO(), n: used + 1, chat: chatUsed }
+  })
 }
 
 /* ---------- the API surface coach-api.js dispatches to ---------- */
@@ -96,6 +111,10 @@ export const localRefine = async (S, text) => {
   return start(S, 'create', { refine: String(text || '').slice(0, 1000), previous: pendingCreate?.bundle || null, iteration: (pendingCreate?.iteration || 1) + 1 })
 }
 export const localDebrief = (S, workoutId) => start(S, 'debrief', { workoutId: workoutId || null })
+export const localChat = (S, message, lang) => start(S, 'chat', {
+  note: message != null ? String(message).slice(0, 1000) : '',
+  lang: lang || null
+})
 export async function localResolve() { await saveCoachDevice({ pending: null }); return { ok: true } }
 export async function localForget() { job = null; lastError = null; await saveCoachDevice({ pending: null, daily: null }); return { ok: true } }
 
@@ -123,15 +142,22 @@ const hostOf = url => { try { return new URL(url).host } catch { return url || '
 /* ---------- running a job ---------- */
 
 async function start(S, kind, opts) {
+  // Empty chat is refused before the cap, the way POST /api/coach/chat answers 400.
+  if (kind === 'chat' && !String(opts.note || '').trim()) {
+    throw Object.assign(new Error('message is required'), { status: 400, code: 'message' })
+  }
   if (job) throw Object.assign(new Error(t('The Coach is already thinking about your training.')), { status: 409, code: 'busy' })
   if (!S?.coach?.consent?.agreedAt) throw Object.assign(new Error(t('The Coach needs your go-ahead first.')), { status: 403, code: 'consent' })
   const d = await loadCoachDevice()
   const adapter = ADAPTERS[d.provider]
   if (d.mode !== 'byok' || !adapter) throw Object.assign(new Error(t('The Coach isn’t set up on this phone.')), { status: 503, code: 'off' })
   const cap = await capState()
-  if (cap.used >= cap.limit) throw Object.assign(new Error(t('The Coach is taking a breather. You’ve used today’s {0} runs on this phone.', cap.limit)), { status: 429, code: 'cap' })
+  const atCap = kind === 'chat'
+    ? (cap.chatLimit > 0 && cap.chatUsed >= cap.chatLimit)
+    : (cap.limit > 0 && cap.used >= cap.limit)
+  if (atCap) throw Object.assign(new Error(t('The Coach is taking a breather. You’ve used today’s {0} runs on this phone.', kind === 'chat' ? cap.chatLimit : cap.limit)), { status: 429, code: 'cap' })
 
-  await bumpDaily()
+  await bumpDaily(kind)
   job = { id: 'local-' + Date.now().toString(36), kind, state: 'running', startedAt: Date.now() }
   lastError = null
   // Not awaited: the screens poll, exactly as they do against a server.
@@ -141,6 +167,7 @@ async function start(S, kind, opts) {
 
 async function run(S, kind, opts, d, adapter) {
   const key = await getApiKey()
+  if (kind === 'chat') return runChatJob(S, opts, d, adapter, key)
   const payload = payloadLib.build(S, {
     handle: await handle(), kind, intake: opts.intake, note: opts.note, refine: opts.refine, previous: opts.previous, workoutId: opts.workoutId,
     lang: getLang()   // what the app shows, which a profile that never picked a language does not store (#303)
@@ -174,6 +201,41 @@ async function run(S, kind, opts, d, adapter) {
   }
   await saveCoachDevice({ pending })
   last = { id: job.id, kind, outcome: 'ready', errorClass: null, at: Date.now() }
+  if (notify) notify({ kind: 'ready', pending })
+}
+
+async function runChatJob(S, opts, d, adapter, key) {
+  const prior = await loadCoachDevice();
+  const attempt = await runChat({
+    adapter, cfg: cfgOf(d), S, message: opts.note, handle: await handle(),
+    openProposal: prior.pending,
+    lang: opts.lang || getLang(),
+    model: d.model || HTTP_PROVIDERS[d.provider].defaultModel, timeoutMs: timeoutFor(d.provider),
+    invokeOpts: { env: envOf(d, key), fetch: nativeFetch },
+    onStep: step => { if (job) job.step = step }
+  })
+  if (!attempt.ok) {
+    const detail = attempt.detail || (Array.isArray(attempt.errors) && attempt.errors.length
+      ? attempt.errors.slice(0, 3).map(String).join(' · ').slice(0, 300)
+      : null)
+    lastError = { errorClass: attempt.errorClass, detail }
+    last = { id: job.id, kind: 'chat', outcome: 'failed', errorClass: attempt.errorClass, at: Date.now() }
+    if (notify) notify({ kind: 'failed', errorClass: attempt.errorClass, detail })
+    return
+  }
+  const info = attempt.cards.filter(c => !isActionable(c))
+  const acts = attempt.cards.filter(c => isActionable(c))
+  const rec = await loadCoachDevice()
+  const pending = acts.length
+    ? {
+      id: job.id, jobId: job.id, kind: 'chat', createdAt: Date.now(),
+      expiresAt: Date.now() + PENDING_DAYS * 86400000,
+      planHash: planHash(S),
+      reply: attempt.reply, cards: acts
+    }
+    : rec.pending
+  await saveCoachDevice({ pending })
+  last = { outcome: 'chat', jobId: job.id, at: Date.now(), reply: attempt.reply, cards: info }
   if (notify) notify({ kind: 'ready', pending })
 }
 

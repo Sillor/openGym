@@ -16,7 +16,10 @@ import { tappable, useRevealActiveChip } from '../lib/use-sheet-keyboard.js'
 import { useAutoMore } from '../lib/use-auto-more.js'
 import { isFav, sortFavouritesFirst } from '../lib/favourites.js'
 
-export default function Library() {
+/* The exercise library: its own page at /library, and Plan's Exercises view (`embedded`) where the
+   Coach has the last tab. Embedded, Plan's header is the page's, so the title goes and the count
+   and "By muscle" sit on one line above the search. */
+export default function Library({ embedded = false }) {
   const nav = useNavigate()
   const S = useStore(s => s.S)
   const [q, setQ] = useState('')
@@ -66,13 +69,15 @@ export default function Library() {
     </div>
   }
 
+  const count = <div className="sub lib-count">{ownCount
+    ? tn('{1} animated exercises + 1 of your own', '{1} animated exercises + {0} of your own', ownCount, EXDB.length)
+    : t('{0} exercises with animations', EXDB.length)}</div>
+  const byMuscle = <Button size="sm" variant="tinted" icon="figureStrength" onClick={() => nav('/muscles')}>{t('By muscle')}</Button>
+
   return <>
-    <div className="hdr lib-hdr"><div><h1>{t('Exercises')}</h1></div>
-      <Button size="sm" variant="tinted" icon="figureStrength" onClick={() => nav('/muscles')}>{t('By muscle')}</Button>
-      <div className="sub lib-count">{ownCount
-        ? tn('{1} animated exercises + 1 of your own', '{1} animated exercises + {0} of your own', ownCount, EXDB.length)
-        : t('{0} exercises with animations', EXDB.length)}</div>
-    </div>
+    {embedded
+      ? <div className="row lib-bar">{count}{byMuscle}</div>
+      : <div className="hdr lib-hdr"><div><h1>{t('Exercises')}</h1></div>{byMuscle}{count}</div>}
     <div className="search-row" style={{ marginBottom: 10 }}><div className={'search' + (narrowed ? ' has-count' : '') + (q ? ' has-clear' : '')}><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
       <input className="input" placeholder={t('Search…')} value={q} onChange={e => { setQ(e.target.value); setShown(40) }} />
       {narrowed && <span className="search-count" role="status" aria-label={exCount(f.length)}>{fmtNum(f.length)}</span>}

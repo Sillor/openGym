@@ -7,7 +7,7 @@ import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { t } from '../lib/i18n.js'
 import { fmtNum } from '../lib/format.js'
-import { emptyNutrition, nutritionOf, profileTargets, targetExplain, weeklyFromUnit, weeklyInUnit } from '../lib/nutrition.js'
+import { emptyNutrition, nutritionOf, profileTargets, targetExplain, weeklyCalorieNudge, weeklyFromUnit, weeklyInUnit } from '../lib/nutrition.js'
 import { fromMeasurementDisplay, measurementUnit, toMeasurementDisplay } from '../lib/measurements.js'
 import { Section, Row, SelectRow, NumberField, TextField, Button } from '../components/ui.jsx'
 
@@ -92,19 +92,49 @@ function ListField({ label, values, onChange, placeholder }) {
 }
 
 function BirthdayField({ value, onChange }) {
-  const [draft, setDraft] = useState(null)
-  const shown = draft ?? (value || '')
   return <label className="measure-field">
     <span>{t('Birthday')}</span>
-    <TextField aria-label={t('Birthday')} value={shown} placeholder="1990-05-01" inputMode="numeric"
-      onChange={e => {
-        const s = e.target.value
-        setDraft(s)
-        if (s === '') onChange(null)
-        else if (/^\d{4}-\d{2}-\d{2}$/.test(s)) onChange(s)
-      }}
-      onBlur={() => setDraft(null)} />
+    <span className="measure-input">
+      <input type="date" aria-label={t('Birthday')} value={value || ''}
+        onChange={e => onChange(e.target.value || null)}
+        style={{ width: '100%', background: 'transparent', color: 'inherit', border: 0, font: 'inherit' }} />
+    </span>
   </label>
+}
+
+// Hide one proposal until the weigh-ins, the diary, or the target inputs change.
+function nudgeSignature(S, proposal) {
+  const n = S?.nutrition || {}
+  const food = (S?.foodLog || []).filter(e => e && e.d).map(e => e.d).sort().join(',')
+  const weights = (S?.bodyweight || []).filter(e => e && e.d).map(e => e.d + ':' + e.w).sort().join(',')
+  const fat = (S?.measurements || []).filter(e => e && e.bodyFat > 0).map(e => e.d + ':' + e.bodyFat).sort().join(',')
+  const raw = [
+    n.heightCm, n.birthday, n.sex, n.activity, n.goal, n.weeklyKg,
+    n.customKcal, n.customProtein, n.customCarbs, n.customFat,
+    S?.unit, S?.targetW, S?.coach?.profile?.goal,
+    food, weights, fat,
+  ].join('|')
+  let h = 5381
+  for (let i = 0; i < raw.length; i++) h = Math.imul(33, h) ^ raw.charCodeAt(i)
+  return proposal.kcal + ':' + (h >>> 0).toString(36)
+}
+
+function CalorieNudge() {
+  const S = useStore(s => s.S)
+  const update = useStore(s => s.update)
+  const proposal = weeklyCalorieNudge(S)
+  if (!proposal.proposed) return null
+  const sig = nudgeSignature(S, proposal)
+  if ((S.nutrition || {}).nudgeDismissed === sig) return null
+  return <Section>
+    <div style={{ padding: '12px 16px 14px' }}>
+      <div className="small" style={{ marginBottom: 10, lineHeight: 1.45 }}>{proposal.reason}</div>
+      <div className="btn-row">
+        <Button variant="primary" onClick={() => patchNutrition(update, { customKcal: proposal.kcal })}>{t('Accept')}</Button>
+        <Button onClick={() => patchNutrition(update, { nudgeDismissed: sig })}>{t('Dismiss')}</Button>
+      </div>
+    </div>
+  </Section>
 }
 
 export function NutritionFields({ essentials = false }) {
@@ -163,6 +193,7 @@ export function NutritionFields({ essentials = false }) {
     </Section>
 
     {!essentials && <>
+      <CalorieNudge />
       <Section title={t('Your own numbers')} footer={t('Leave a field empty to use the formula.')}>
         <div className="measure-form" style={{ margin: '4px 16px 14px' }}>
           <Num label={t('Calories')} unit="kcal" value={n.customKcal ?? null} onChange={v => set({ customKcal: v == null ? null : Math.round(v) })} />
@@ -191,15 +222,17 @@ export default function NutritionSettings() {
   return <NutritionFields />
 }
 
-function NutritionSetup({ close }) {
+function NutritionSetup({ close, onDone }) {
   return <>
     <h3 style={{ marginTop: 0 }}>{t('Set your calorie target')}</h3>
     <NutritionFields essentials />
-    <Button variant="primary" onClick={close}>{t('Done')}</Button>
+    <Button variant="primary" onClick={() => { onDone?.(); close() }}>{t('Done')}</Button>
+    <div style={{ height: 8 }} />
+    <Button onClick={close}>{t('Skip')}</Button>
   </>
 }
 
-/** The short version of this page. The diary opens it the first time height is missing. */
-export function openNutritionSetup() {
-  useUI.getState().openSheet(close => <NutritionSetup close={close} />)
+/** The short version of this page. `onDone` runs from Done; Skip only closes, so a meal can still be typed. */
+export function openNutritionSetup(onDone) {
+  useUI.getState().openSheet(close => <NutritionSetup close={close} onDone={onDone} />)
 }

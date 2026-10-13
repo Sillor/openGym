@@ -2598,6 +2598,55 @@ paths:
         '429': { $ref: '#/components/responses/CoachRefused' }
         '503': { $ref: '#/components/responses/CoachOff' }
 
+  /api/coach/chat:
+    post:
+      tags: [coach]
+      operationId: postCoachChat
+      summary: Send a chat message to the Coach
+      description: |
+        Queues a `chat` job. The body carries this turn's `message`; earlier turns are
+        read from the synced `S.coach.chat` log (last 20, each sliced to 1500 characters),
+        honouring `S.coach.chatClearedAt`. The answer is 202 and a job id; while it runs,
+        `GET /api/coach/status` exposes `job.step`. On finish, `last` holds the reply and
+        any informational cards; actionable cards become `pending` (`kind: chat`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  maxLength: 4000
+                  description: |
+                    This turn, in plain words. Cut to the instance's `maxMessageLen`
+                    (1000 unless the admin changed it; 200–4000).
+                lang:
+                  type: string
+                  pattern: '^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})?$'
+                  description: |
+                    The language the app is showing, which the Coach writes in. Absent or not a
+                    language tag, the profile's stored `lang` is used.
+            example: { message: 'How is my protein this week?' }
+      responses:
+        '202': { $ref: '#/components/responses/CoachJobQueued' }
+        '400':
+          description: No message, or it was only whitespace.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+              example: { error: message is required }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/CoachRefused' }
+        '409': { $ref: '#/components/responses/CoachRefused' }
+        '429': { $ref: '#/components/responses/CoachRefused' }
+        '503': { $ref: '#/components/responses/CoachOff' }
+
   /api/coach/pending/resolve:
     post:
       tags: [coach]
@@ -2606,7 +2655,9 @@ paths:
       description: |
         The client applies the accepted changes to its own state and syncs them through
         `PUT /api/data`; this only records the decision and clears the proposal. Sending
-        it when nothing is waiting is a no-op, not an error.
+        it when nothing is waiting is a no-op, not an error. A chat proposal is the same
+        slot (`kind: chat`); `accepted` lists card ids that were applied, and
+        `dismissed: true` throws the whole reply's proposals away.
       requestBody:
         required: false
         content:
@@ -2792,8 +2843,9 @@ paths:
                 caps:
                   type: object
                   properties:
-                    perProfileDaily: { type: integer, minimum: 0, maximum: 200, description: 0 = no cap. }
+                    perProfileDaily: { type: integer, minimum: 0, maximum: 200, description: 0 = no cap. Plan, review and debrief jobs. }
                     instanceDaily: { type: integer, minimum: 0, maximum: 5000, description: 0 = no cap. }
+                    chatDaily: { type: integer, minimum: 0, maximum: 2000, description: 0 = no cap. Chat jobs, counted separately. Default 200. }
                 maxMessageLen:
                   type: integer
                   minimum: 200
@@ -3768,7 +3820,55 @@ components:
       description: What this profile has spent of its daily allowance.
       properties:
         used: { type: integer }
-        limit: { type: integer, description: 0 means no per-profile cap. }
+        limit: { type: integer, description: 0 means no per-profile cap. Plan, review and debrief. }
+        chatUsed: { type: integer, description: Chat jobs enqueued today. }
+        chatLimit: { type: integer, description: 0 means no chat cap. }
+
+    CoachChatCard:
+      type: object
+      description: |
+        A card under a chat reply. `exercises` and `nutrition` are informational (on `last.cards`);
+        `changes` and `routines` are actionable (on `pending.cards`).
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [exercises, nutrition, changes, routines] }
+        ids:
+          type: array
+          items: { type: string }
+          description: Exercise ids, on `type: exercises`.
+        note: { type: string, description: Optional caption on an exercises card. }
+        summary: { type: string }
+        title: { type: string }
+        days:
+          type: array
+          maxItems: 14
+          description: Daily totals on a nutrition card.
+          items:
+            type: object
+            properties:
+              d: { type: string }
+              kcal: { type: number }
+              protein: { type: number }
+              carbs: { type: number }
+              fat: { type: number }
+        targets:
+          oneOf:
+            - type: object
+              properties:
+                kcal: { type: number }
+                protein: { type: number }
+                carbs: { type: number }
+                fat: { type: number }
+            - type: 'null'
+        changes:
+          type: array
+          description: Validated review changes, on `type: changes`.
+          items: { type: object, additionalProperties: true }
+        bundle:
+          type: object
+          description: Validated plan bundle, on `type: routines`.
+          additionalProperties: true
+      additionalProperties: true
 
     CoachStatus:
       type: object
@@ -3778,9 +3878,17 @@ components:
             - type: object
               properties:
                 id: { type: string }
-                kind: { type: string, enum: [create, review, debrief] }
+                kind: { type: string, enum: [create, review, debrief, chat] }
                 state: { type: string, enum: [queued, running] }
                 startedAt: { type: integer, description: Epoch ms. }
+                step:
+                  type: string
+                  description: |
+                    Present on a running chat job. One of the exact English strings the app
+                    translates: "Reading your workout history", "Checking your exercise progress",
+                    "Searching the exercise library", "Checking your food diary",
+                    "Checking your body metrics", "Looking at your routine",
+                    "Checking a proposal", "Writing a reply".
             - type: 'null'
           description: The job running now, or null. One at a time per profile.
         pending:
@@ -3801,13 +3909,19 @@ components:
               description: How the most recent job ended, so the chat can say so in the Coach's own voice.
               properties:
                 id: { type: string }
-                kind: { type: string, enum: [create, review, debrief] }
-                outcome: { type: string, enum: [ready, nochange, applied, dismissed, expired, failed] }
+                jobId: { type: string, description: Present on a finished chat. Same as the job id. }
+                kind: { type: string, enum: [create, review, debrief, chat] }
+                outcome: { type: string, enum: [ready, nochange, applied, dismissed, expired, failed, chat] }
                 errorClass:
                   oneOf: [{ type: string }, { type: 'null' }]
                   description: e.g. `provider`, `unusable`, `restart`, `forgotten`, `consent`, `noworkout`.
                 at: { type: integer, description: Epoch ms. }
                 reading: { type: string, description: "Present on `nochange`: why there was nothing to change." }
+                reply: { type: string, description: Present on `outcome: chat`. The Coach's prose. }
+                cards:
+                  type: array
+                  description: Informational cards of a finished chat (`exercises`, `nutrition`).
+                  items: { $ref: '#/components/schemas/CoachChatCard' }
             - type: 'null'
 
     CoachProposal:
@@ -3816,10 +3930,18 @@ components:
         The answer waiting for a decision, from whichever kind of job produced it. It
         expires 14 days after it was made; the first status poll after that retires it.
         `changes` comes from a review, `bundle` from a plan, `score`/`highlights` from a
-        debrief. One of the three, never more.
+        debrief. A chat with actionable cards (`changes`, `routines`) uses `kind: chat`,
+        `jobId`, `reply` and `cards`. A finished chat supersedes an older chat pending;
+        a chat with no actionable cards leaves a waiting plan, review or debrief in place.
       properties:
         id: { type: string, description: The job's id. }
-        kind: { type: string, enum: [create, review, debrief] }
+        jobId: { type: string, description: Present on a chat pending. Same as `id`. }
+        kind: { type: string, enum: [create, review, debrief, chat] }
+        reply: { type: string, description: Present on a chat pending. The same prose as `last.reply`. }
+        cards:
+          type: array
+          description: Actionable cards of a chat (`changes`, `routines`).
+          items: { $ref: '#/components/schemas/CoachChatCard' }
         createdAt: { type: integer, description: Epoch ms. }
         expiresAt: { type: integer, description: Epoch ms. }
         planHash: { type: string, description: The plan this was written against. A later edit makes it stale. }
@@ -3836,7 +3958,7 @@ components:
                 type: string
                 enum: [add-exercise, remove-exercise, swap-exercise, sets, reps, repsMin, repsMax,
                        sec, cardio, reorder, superset, routine-prog, exercise-prog, inc,
-                       add-routine, remove-routine, rename-routine, week]
+                       add-routine, remove-routine, rename-routine, week, nutrition-targets]
               why: { type: string }
               before: { description: What the plan says now. The client checks it before applying. }
               after: { description: What it would say. }
@@ -3958,6 +4080,7 @@ components:
           properties:
             perProfileDaily: { type: integer }
             instanceDaily: { type: integer }
+            chatDaily: { type: integer, description: Chat jobs per profile per day. Default 200. 0 = no cap. }
         maxMessageLen: { type: integer, description: 'How long a chat message, refinement or review note can be (200–4000, default 1000).' }
         community: { type: boolean }
         runtime:

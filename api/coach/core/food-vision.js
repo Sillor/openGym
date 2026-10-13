@@ -34,8 +34,8 @@ const SPECS = { openai: openaiSpec, compatible: compatibleSpec, gemini: geminiSp
 
 const COMPACT_NOTE = '\n\nIMPORTANT: The previous response did not contain a complete answer. Return only the requested compact JSON object, with no reasoning, explanation, or markdown.';
 
-const SCHEMA = '{"name":"...","calories":0,"protein":0.0,"carbs":0.0,"fat":0.0,"serving_size_grams":0.0,"ingredients":[]}';
-const INGREDIENT = '{"name":"...","grams":0.0,"calories":0,"protein":0.0,"carbs":0.0,"fat":0.0}';
+const SCHEMA = '{"name":"...","serving_quantity":1,"serving_unit":"serving","calories":0,"protein":0.0,"carbs":0.0,"fat":0.0,"serving_size_grams":0.0,"ingredients":[]}';
+const INGREDIENT = '{"name":"...","quantity":1,"unit":"g","calories":0,"protein":0.0,"carbs":0.0,"fat":0.0,"grams":0.0}';
 
 /** Image prompt, ported from Fud AI's multi-photo / single-photo analysis. Schema is the diary's. */
 export function imageFoodPrompt(description) {
@@ -43,10 +43,11 @@ export function imageFoodPrompt(description) {
     'Analyze these food images together as one meal logging request. They may show different angles of the same food, separate ingredients, kitchen-scale readings, packaging, or nutrition labels.',
     'Use every image once. Do not double-count the same food shown from multiple angles. When separate ingredients are shown, combine their nutrition into one meal total. Read visible scale weights and nutrition labels when available; prefer those measurements over visual portion estimates.',
     'Treat the photos as multiple views of the same item unless there are clearly separate foods.',
-    'Respond ONLY with JSON:',
+    'Respond ONLY with JSON for this one meal:',
     SCHEMA,
+    'serving_quantity is a number. serving_unit is a short unit: g, ml, cup, tbsp, piece, slice, or serving. Pick a unit that fits the food: ml or cup for a liquid, piece or slice for something countable, grams when it was weighed.',
     'Calories are integers. Protein/carbs/fat are decimal gram values when needed. serving_size_grams is the estimated weight in grams of the serving shown.',
-    `ingredients is required. Return each clearly separate food once using ${INGREDIENT}. Ingredient grams and macros must describe the full meal and add up approximately to the meal totals. Return [] only when a reliable breakdown is not possible.`,
+    `ingredients is required and holds at most 8 foods. Return each clearly separate food once using ${INGREDIENT}. Include grams when the weight is known. Ingredient grams and macros must describe the full meal and add up approximately to the meal totals. Do not list salt, pepper, oil spray, or similar seasonings. Return [] only when a reliable breakdown is not possible.`,
     'Give your best estimate for the visible food amount shown in the image. For whole/mostly-whole cakes, pizzas, pies, loaves, or similar foods, estimate the total visible item/remaining item weight rather than defaulting to one slice.'
   ].join('\n');
   const note = typeof description === 'string' ? description.trim() : '';
@@ -59,10 +60,11 @@ export function textFoodPrompt(description) {
   return [
     `Estimate the nutritional content for: ${description}`,
     "Parse any quantities, brands, and multiple items from the text. If a brand is mentioned, use that brand's known nutritional data. If multiple items are described, sum up the total nutrition.",
-    'Respond ONLY with JSON:',
+    'Respond ONLY with JSON for this one meal:',
     SCHEMA,
+    'serving_quantity is a number. serving_unit is a short unit: g, ml, cup, tbsp, piece, slice, or serving. Pick a unit that fits the food: ml or cup for a liquid, piece or slice for something countable, grams when it was weighed.',
     'Calories are integers. Protein/carbs/fat are decimal gram values when needed. serving_size_grams is the estimated total weight in grams.',
-    `ingredients is required. For a meal with multiple meaningful foods, return each food once using ${INGREDIENT}. Ingredient grams and macros must describe the analyzed amount and add up approximately to the meal totals. Return [] for a single simple food or when a reliable breakdown is not possible.`
+    `ingredients is required and holds at most 8 foods. For a meal with multiple meaningful foods, return each food once using ${INGREDIENT}. Include grams when the weight is known. Ingredient grams and macros must describe the analyzed amount and add up approximately to the meal totals. Do not list salt, pepper, oil spray, or similar seasonings. Return [] for a single simple food or when a reliable breakdown is not possible.`
   ].join('\n');
 }
 

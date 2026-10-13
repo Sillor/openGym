@@ -46,10 +46,11 @@ vi.mock('../lib/api.js', () => ({
       if (mocks.statusGate) { const gate = mocks.statusGate; mocks.statusGate = null; await gate }
       return snap
     }
-    if (opts?.method === 'POST' && /^\/api\/coach\/(review|plan|debrief)$/.test(path)) {
+    if (opts?.method === 'POST' && /^\/api\/coach\/(review|plan|debrief|chat)$/.test(path)) {
       const id = 'job' + (++srv.n)
       srv.used++
-      srv.last = { id, kind: path.endsWith('plan') ? 'create' : 'review', outcome: 'failed', errorClass: 'provider', at: Date.now() }
+      const kind = path.endsWith('plan') ? 'create' : path.endsWith('chat') ? 'chat' : path.endsWith('debrief') ? 'debrief' : 'review'
+      srv.last = { id, kind, outcome: 'failed', errorClass: 'provider', at: Date.now() }
       return { job: { id } }
     }
     return {}
@@ -103,12 +104,12 @@ afterEach(async () => {
 })
 
 describe('a Coach run that fails before the first poll', () => {
-  it('“Review my training” gets the error reply, once, and the counter reads what the server counted', async () => {
+  it('“Review my last week” gets the error reply, once, and the counter reads what the server counted', async () => {
     mocks.S = state([routine])
     await mount()
     expect(replies()).toHaveLength(0)                         // opening the chat answers nothing old
 
-    await click(chip(/Review my training/))
+    await click(chip(/Review my last week/))
     expect(mocks.S.coach.chat.at(-1)).toMatchObject({ role: 'coach', kind: 'error', text: FAILED })
     expect(mocks.S.coach.chat.at(-2)).toMatchObject({ role: 'user', kind: 'text' })
     expect(container.querySelector('.composer-cap').textContent).toBe('5 of 10 Coach runs used today')
@@ -116,7 +117,7 @@ describe('a Coach run that fails before the first poll', () => {
     await settle()
     expect(replies()).toHaveLength(1)                         // written once, not on every render
 
-    await click(chip(/Review my training/))
+    await click(chip(/Review my last week/))
     expect(replies()).toHaveLength(2)
     expect(container.querySelector('.composer-cap').textContent).toBe('6 of 10 Coach runs used today')
   })
@@ -132,7 +133,7 @@ describe('a Coach run that fails before the first poll', () => {
     await click(container.querySelector('.composer .send'))
     expect(mocks.S.coach.chat.at(-2)).toMatchObject({ role: 'user', kind: 'text', text: 'Add more legs please' })
     expect(mocks.S.coach.chat.at(-1)).toMatchObject({ role: 'coach', kind: 'error', text: FAILED })
-    expect(mocks.server.last.kind).toBe('create')
+    expect(mocks.server.last.kind).toBe('chat')
   })
 
   it('the plan the intake asked for, failed before the chat opened, is answered when it opens', async () => {
@@ -150,7 +151,7 @@ describe('a Coach run that fails before the first poll', () => {
     let release
     mocks.statusGate = new Promise(r => { release = r })
     await mount()
-    await click(chip(/Review my training/))
+    await click(chip(/Review my last week/))
     expect(container.querySelector('.composer-cap').textContent).toBe('5 of 10 Coach runs used today')
     await act(async () => { release(); await flush() })
     expect(container.querySelector('.composer-cap').textContent).toBe('5 of 10 Coach runs used today')

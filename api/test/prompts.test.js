@@ -14,7 +14,9 @@ const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'coach
 
 test('core/prompts.js matches api/coach/prompts/*.md byte for byte', () => {
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort();
-  assert.deepEqual(Object.keys(PROMPTS).sort(), files.map(f => f.replace(/\.md$/, '')));
+  // Sorted as stem names, not as filenames: `chat.md` sorts after `chat-json.md` on disk
+  // (`-` < `.`) but `chat` sorts before `chat-json` as keys.
+  assert.deepEqual(Object.keys(PROMPTS).sort(), files.map(f => f.replace(/\.md$/, '')).sort());
   for (const f of files) {
     assert.equal(PROMPTS[f.replace(/\.md$/, '')], fs.readFileSync(path.join(dir, f), 'utf8'), `${f} is stale — run node scripts/build-coach-assets.mjs`);
   }

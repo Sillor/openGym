@@ -14,10 +14,11 @@ vi.mock('./mobile.js', () => ({
 }))
 const secret = { key: 'sk-test-1' }
 vi.mock('./coach-secrets.js', () => ({ getApiKey: async () => secret.key, setApiKey: async v => { secret.key = v }, clearApiKey: async () => { secret.key = null } }))
-const wire = { calls: [], answer: null }
+const wire = { calls: [], answer: null, delay: 0 }
 vi.mock('./capacitor-fetch.js', () => ({
   nativeFetch: async (url, init) => {
     wire.calls.push({ url, init, body: JSON.parse(init.body) })
+    if (wire.delay) await new Promise(r => setTimeout(r, wire.delay))
     const a = typeof wire.answer === 'function' ? wire.answer(wire.calls.length) : wire.answer
     return { ok: a.status < 300, status: a.status, text: async () => JSON.stringify(a.body), json: async () => a.body }
   }
@@ -55,7 +56,7 @@ describe('the Coach on a phone with its own key', () => {
   beforeEach(async () => {
     _resetCoachDevice(); local._resetLocal()
     device.data = { mode: 'byok', provider: 'openai', model: 'gpt-t', baseUrl: null }
-    wire.calls = []; wire.answer = chat(JSON.stringify(review)); secret.key = 'sk-test-1'
+    wire.calls = []; wire.answer = chat(JSON.stringify(review)); wire.delay = 0; secret.key = 'sk-test-1'
   })
 
   it('runs a review through the real pipeline and produces a proposal the apply engine accepts', async () => {
@@ -155,7 +156,10 @@ describe('the Coach on a phone with its own key', () => {
     // Americas the two differ, and a UTC stamp here read as yesterday's record and let the run through.
     await saveCoachDevice({ daily: { d: todayISO(), n: local.LOCAL_DAILY_CAP } })
     await expect(local.localReview(state())).rejects.toMatchObject({ code: 'cap' })
-    expect((await local.localStatus()).cap).toEqual({ used: local.LOCAL_DAILY_CAP, limit: local.LOCAL_DAILY_CAP })
+    expect((await local.localStatus()).cap).toEqual({
+      used: local.LOCAL_DAILY_CAP, limit: local.LOCAL_DAILY_CAP,
+      chatUsed: 0, chatLimit: local.LOCAL_CHAT_DAILY_CAP
+    })
   })
 
   it('a proposal waits in the device file, expires, and is cleared by resolve', async () => {
@@ -195,6 +199,139 @@ describe('the Coach on a phone with its own key', () => {
     expect(d.payer).toBe('you')
     expect(d.host).toBe('api.openai.com')
     expect(d.categories).toEqual(['plan', 'training', 'bodyweight', 'nutrition', 'profile', 'prefs'])
+  })
+})
+
+const toolCall = (name, args, id = 'call_1') => ({
+  status: 200,
+  body: { choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] }
+})
+
+describe('chat on a phone with its own key', () => {
+  beforeEach(async () => {
+    _resetCoachDevice(); local._resetLocal()
+    device.data = { mode: 'byok', provider: 'openai', model: 'gpt-t', baseUrl: null }
+    wire.calls = []; wire.answer = chat('Last week looked solid.'); wire.delay = 0; secret.key = 'sk-test-1'
+  })
+
+  it('runs the agent loop and reports last in the server’s chat shape', async () => {
+    await local.localChat(state(), 'How did last week go?', 'en')
+    const s = await settle()
+    expect(s.last).toMatchObject({ outcome: 'chat', jobId: expect.stringMatching(/^local-/), reply: 'Last week looked solid.', cards: [] })
+    expect(s.last).not.toHaveProperty('kind')
+    expect(s.last).not.toHaveProperty('id')
+    expect(s.pending).toBeNull()
+    expect(wire.calls[0].body.tools).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'function' })]))
+    expect(wire.calls[0].body.messages.some(m => m.role === 'user' && m.content.includes('How did last week go?'))).toBe(true)
+    expect((await local.localStatus()).cap).toMatchObject({ used: 0, chatUsed: 1, chatLimit: local.LOCAL_CHAT_DAILY_CAP })
+  })
+
+  it('an empty message is 400 and does not spend the cap', async () => {
+    await expect(local.localChat(state(), '  ')).rejects.toMatchObject({ status: 400, code: 'message' })
+    expect(wire.calls).toHaveLength(0)
+    expect((await local.localStatus()).cap.chatUsed).toBe(0)
+  })
+
+  it('informational cards land on last; proposing cards become pending', async () => {
+    wire.answer = n => n === 1
+      ? toolCall('show_exercises', { ids: [EX], note: 'From the plan.' })
+      : chat('Here is one from your plan.')
+    await local.localChat(state(), 'Show me an exercise')
+    const s = await settle()
+    expect(s.last.outcome).toBe('chat')
+    expect(s.last.cards).toEqual([expect.objectContaining({ type: 'exercises', ids: [EX] })])
+    expect(s.pending).toBeNull()
+
+    local._resetLocal(); wire.calls = []
+    await saveCoachDevice({ pending: null })
+    wire.answer = n => n === 1
+      ? toolCall('propose_changes', {
+        title: 'Add a set',
+        changes: [{ id: 'c1', type: 'sets', target: { routineId: 'r1', exId: EX }, after: 4, why: 'every set was clean' }]
+      })
+      : chat('I would add a set.')
+    const S = state()
+    await local.localChat(S, 'Add a set on the first lift')
+    const p = await settle()
+    expect(p.last.cards).toEqual([])
+    expect(p.pending.kind).toBe('chat')
+    expect(p.pending.jobId).toBe(p.last.jobId)
+    expect(p.pending.id).toBe(p.pending.jobId)
+    expect(p.pending.planHash).toBe(planHash(S))
+    expect(p.pending.expiresAt).toBeGreaterThan(Date.now())
+    expect(p.pending.cards).toEqual([expect.objectContaining({ type: 'changes', title: 'Add a set' })])
+    expect(p.pending.reply).toBe('I would add a set.')
+    expect(device.data.pending.kind).toBe('chat')
+  })
+
+  it('a later explanation keeps an open chat card and leaves a review pending alone', async () => {
+    wire.answer = n => n === 1
+      ? toolCall('propose_changes', {
+        title: 'Add a set',
+        changes: [{ id: 'c1', type: 'sets', target: { routineId: 'r1', exId: EX }, after: 4, why: 'every set was clean' }]
+      })
+      : chat('I would add a set.')
+    await local.localChat(state(), 'Add a set')
+    await settle()
+    expect((await local.localStatus()).pending.kind).toBe('chat')
+
+    local._resetLocal(); wire.calls = []
+    wire.answer = chat('Nothing to change.')
+    await local.localChat(state(), 'Just checking in')
+    const still = await settle()
+    expect(still.pending.kind).toBe('chat')
+    expect(still.pending.cards[0].type).toBe('changes')
+    expect(still.last.reply).toBe('Nothing to change.')
+
+    local._resetLocal(); wire.calls = []
+    wire.answer = chat(JSON.stringify(review))
+    await local.localReview(state())
+    await settle()
+    expect((await local.localStatus()).pending.kind).toBe('review')
+
+    local._resetLocal(); wire.calls = []
+    wire.answer = chat('Just a thought.')
+    await local.localChat(state(), 'How is my protein?')
+    const kept = await settle()
+    expect(kept.pending.kind).toBe('review')
+    expect(kept.last.outcome).toBe('chat')
+  })
+
+  it('chat and plan/review caps are counted separately on the same daily record', async () => {
+    await saveCoachDevice({ daily: { d: todayISO(), n: local.LOCAL_DAILY_CAP, chat: 0 } })
+    await expect(local.localReview(state())).rejects.toMatchObject({ code: 'cap' })
+    await local.localChat(state(), 'Still room to chat')
+    await settle()
+    expect((await local.localStatus()).cap).toMatchObject({ used: local.LOCAL_DAILY_CAP, chatUsed: 1 })
+
+    local._resetLocal()
+    await saveCoachDevice({ daily: { d: todayISO(), n: 0, chat: local.LOCAL_CHAT_DAILY_CAP }, pending: null })
+    await expect(local.localChat(state(), 'again')).rejects.toMatchObject({ code: 'cap' })
+    wire.answer = chat(JSON.stringify(review))
+    await local.localReview(state())
+    await settle()
+    expect((await local.localStatus()).cap).toMatchObject({ used: 1, chatUsed: local.LOCAL_CHAT_DAILY_CAP })
+  })
+
+  it('sets job.step while a tool runs, and still refuses without consent', async () => {
+    const noConsent = state(); noConsent.coach.consent = null
+    await expect(local.localChat(noConsent, 'hi')).rejects.toMatchObject({ code: 'consent' })
+
+    const steps = []
+    wire.delay = 40
+    wire.answer = n => {
+      if (n === 1) return toolCall('get_workout_history', { days: 14 })
+      return chat('You trained once this week.')
+    }
+    await local.localChat(state(), 'How did last week go?')
+    for (let i = 0; i < 200; i++) {
+      const s = await local.localStatus()
+      if (s.job?.step) steps.push(s.job.step)
+      if (!s.job) break
+      await new Promise(r => setTimeout(r, 5))
+    }
+    expect(steps).toContain('Reading your workout history')
+    expect((await local.localStatus()).last.reply).toBe('You trained once this week.')
   })
 })
 
